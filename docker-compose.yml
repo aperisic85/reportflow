@@ -1,0 +1,42 @@
+services:
+  db:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: reportflow
+      POSTGRES_USER: reportflow
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U reportflow -d reportflow"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+  api:
+    build: ./backend
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: postgres://reportflow:${POSTGRES_PASSWORD}@db:5432/reportflow
+      JWT_SECRET: ${JWT_SECRET}
+      BOOTSTRAP_ADMIN: ${BOOTSTRAP_ADMIN:-admin}
+      BOOTSTRAP_PASSWORD: ${BOOTSTRAP_PASSWORD}
+      DOC_SERVICE_URL: http://documents:8081
+      RUST_LOG: info
+    depends_on:
+      db:
+        condition: service_healthy
+      documents:
+        condition: service_started
+  documents:
+    build: ./document-service
+    restart: unless-stopped
+  frontend:
+    build: ./frontend
+    restart: unless-stopped
+    ports:
+      - "${APP_PORT:-8088}:80"
+    depends_on:
+      - api
+volumes:
+  pgdata:
