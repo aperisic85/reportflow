@@ -1,4 +1,4 @@
-use std::{env, sync::Arc};
+use std::{env, sync::Arc, collections::HashSet};
 use argon2::{Argon2, PasswordHash, PasswordHasher, PasswordVerifier};
 use argon2::password_hash::SaltString;
 use axum::{body::Body, extract::{Path, Query, State}, http::{header, HeaderMap, StatusCode}, response::{IntoResponse, Response}, routing::{get, post, patch}, Json, Router};
@@ -108,6 +108,67 @@ async fn save_update(State(s):State<App>,h:HeaderMap,Json(p):Json<SaveUpdate>)->
  let id:Uuid=sqlx::query_scalar("INSERT INTO activity_updates(activity_id,year,month,kind,content,progress,include_in_document,updated_by) VALUES($1,$2,$3,$4,$5,$6,$7,$8) ON CONFLICT(activity_id,year,month,kind) DO UPDATE SET content=EXCLUDED.content, progress=EXCLUDED.progress, include_in_document=EXCLUDED.include_in_document,updated_by=EXCLUDED.updated_by,updated_at=now() RETURNING id").bind(p.activity_id).bind(p.year).bind(p.month).bind(p.kind).bind(p.content).bind(p.progress).bind(p.include_in_document).bind(c.sub).fetch_one(&s.db).await.map_err(db)?;
  audit(&s,&c,"update.save",Some(id)).await; Ok(Json(json!({"id":id})))
 }
+
+// Carry an unfinished recurring activity into the next month without copying an old
+// accomplishment into the new month's actual results.
+#[derive(Deserialize)] struct CarryRequest {department_id:Uuid,year:i32,month:i32,kind:String}
+async fn carry_forward(State(s):State<App>,h:HeaderMap,Json(p):Json<CarryRequest>)->ResultApi<Json<Value>> {
+ let c=who(&s,&h)?; if !can_manage(&c,p.department_id) {return Err(forbidden());}
+ check_period(p.year,p.month,&p.kind)?;
+ let status:Option<String>=sqlx::query_scalar("SELECT status FROM department_documents WHERE department_id=$1 AND year=$2 AND month=$3 AND kind=$4")
+  .bind(p.department_id).bind(p.year).bind(p.month).bind(&p.kind).fetch_optional(&s.db).await.map_err(db)?;
+ if status.as_deref()==Some("submitted") {return Err(bad("Predani dokument prvo vratite u nacrt"));}
+ let (prev_y,prev_m)=if p.month==1 {(p.year-1,12)} else {(p.year,p.month-1)};
+ let n=sqlx::query("INSERT INTO activity_updates(activity_id,year,month,kind,content,progress,include_in_document,updated_by) SELECT a.id,$2,$3,$4,'','not_started',u.include_in_document,$7 FROM activity_updates u JOIN activities a ON a.id=u.activity_id WHERE a.department_id=$1 AND u.year=$5 AND u.month=$6 AND u.kind=$4 AND a.type IN ('ongoing','project') AND a.status='in_progress' AND u.progress NOT IN ('completed') ON CONFLICT(activity_id,year,month,kind) DO NOTHING")
+  .bind(p.department_id).bind(p.year).bind(p.month).bind(&p.kind).bind(prev_y).bind(prev_m).bind(c.sub).execute(&s.db).await.map_err(db)?.rows_affected();
+ audit(&s,&c,"updates.carry_forward",Some(p.department_id)).await;
+ Ok(Json(json!({"created":n,"source_year":prev_y,"source_month":prev_m})))
+}
+
+// A plan is a reference for reporting, not evidence of work already completed.
+async fn plan_reference(State(s):State<App>,h:HeaderMap,Query(p):Query<PeriodFilter>)->ResultApi<Json<Value>> {
+ let c=who(&s,&h)?; if !can_read(&c,p.department_id) {return Err(forbidden());} check_period(p.year,p.month,&p.kind)?;
+ let rows=sqlx::query("SELECT a.id AS activity_id,a.title,COALESCE(NULLIF(u.content,''),a.description) AS planned FROM activities a JOIN activity_updates u ON u.activity_id=a.id AND u.year=$2 AND u.month=$3 AND u.kind='plan' WHERE a.department_id=$1 AND u.include_in_document=true ORDER BY a.sort_order,a.created_at")
+  .bind(p.department_id).bind(p.year).bind(p.month).fetch_all(&s.db).await.map_err(db)?;
+ Ok(Json(Value::Array(rows.iter().map(|r|json!({"activity_id":r.get::<Uuid,_>("activity_id"),"title":r.get::<String,_>("title"),"planned":r.get::<String,_>("planned")})).collect())))
+}
+
+#[derive(Deserialize)] struct ReorderActivities {department_id:Uuid,ordered_ids:Vec<Uuid>}
+async fn reorder_activities(State(s):State<App>,h:HeaderMap,Json(p):Json<ReorderActivities>)->ResultApi<Json<Value>> {
+ let c=who(&s,&h)?; if !can_manage(&c,p.department_id) {return Err(forbidden());}
+ let mut tx=s.db.begin().await.map_err(db)?;
+ let rows=sqlx::query("SELECT id FROM activities WHERE department_id=$1 FOR UPDATE")
+  .bind(p.department_id).fetch_all(&mut *tx).await.map_err(db)?;
+ let existing:HashSet<Uuid>=rows.iter().map(|r|r.get::<Uuid,_>("id")).collect();
+ let wanted:HashSet<Uuid>=p.ordered_ids.iter().copied().collect();
+ if p.ordered_ids.len()!=existing.len() || wanted!=existing {return Err(bad("Redoslijed mora sadržavati sve aktivnosti odjela, bez ponavljanja"));}
+ for (i,id) in p.ordered_ids.iter().enumerate() {
+  sqlx::query("UPDATE activities SET sort_order=$2,updated_at=now() WHERE id=$1")
+   .bind(id).bind((i as i32)*10).execute(&mut *tx).await.map_err(db)?;
+ }
+ tx.commit().await.map_err(db)?;
+ audit(&s,&c,"activities.reorder",Some(p.department_id)).await;
+ Ok(Json(json!({"ok":true})))
+}
+
+#[derive(Deserialize)] struct MoveActivity {parent_id:Option<Uuid>}
+async fn move_activity(State(s):State<App>,h:HeaderMap,Path(id):Path<Uuid>,Json(p):Json<MoveActivity>)->ResultApi<Json<Value>> {
+ let c=who(&s,&h)?;
+ let dept:Uuid=sqlx::query_scalar("SELECT department_id FROM activities WHERE id=$1").bind(id).fetch_optional(&s.db).await.map_err(db)?.ok_or_else(||bad("Aktivnost ne postoji"))?;
+ if !can_manage(&c,dept) {return Err(forbidden());}
+ if let Some(parent)=p.parent_id {
+  let pd:Option<Uuid>=sqlx::query_scalar("SELECT department_id FROM activities WHERE id=$1").bind(parent).fetch_optional(&s.db).await.map_err(db)?;
+  if pd!=Some(dept) {return Err(bad("Nadređena aktivnost mora biti u istom odjelu"));}
+  // Guard against moving an activity below itself or one of its descendants.
+  let cycle:bool=sqlx::query_scalar("WITH RECURSIVE ancestors(id,parent_id) AS (SELECT id,parent_id FROM activities WHERE id=$1 UNION ALL SELECT a.id,a.parent_id FROM activities a JOIN ancestors x ON a.id=x.parent_id) SELECT EXISTS(SELECT 1 FROM ancestors WHERE id=$2)")
+   .bind(parent).bind(id).fetch_one(&s.db).await.map_err(db)?;
+  if cycle {return Err(bad("Aktivnost ne može biti vlastita podstavka"));}
+ }
+ sqlx::query("UPDATE activities SET parent_id=$2,updated_at=now() WHERE id=$1").bind(id).bind(p.parent_id).execute(&s.db).await.map_err(db)?;
+ audit(&s,&c,"activity.move",Some(id)).await;
+ Ok(Json(json!({"ok":true})))
+}
+
 async fn department_docs(State(s):State<App>,h:HeaderMap,Query(p):Query<PeriodFilter>)->ResultApi<Json<Value>> {
  let c=who(&s,&h)?; if !can_read(&c,p.department_id) {return Err(forbidden());} check_period(p.year,p.month,&p.kind)?;
  let row=sqlx::query("SELECT id,status,submitted_at FROM department_documents WHERE department_id=$1 AND year=$2 AND month=$3 AND kind=$4").bind(p.department_id).bind(p.year).bind(p.month).bind(p.kind).fetch_optional(&s.db).await.map_err(db)?;
@@ -117,6 +178,11 @@ async fn department_docs(State(s):State<App>,h:HeaderMap,Query(p):Query<PeriodFi
 async fn save_department_doc(State(s):State<App>,h:HeaderMap,Json(p):Json<SubmitDept>)->ResultApi<Json<Value>> {
  let c=who(&s,&h)?; if !can_manage(&c,p.department_id) {return Err(forbidden());} check_period(p.year,p.month,&p.kind)?;
  if !["draft","submitted"].contains(&p.status.as_str()) {return Err(bad("Nevaljan status dokumenta"));}
+ if p.status=="submitted" {
+  let count:i64=sqlx::query_scalar("SELECT COUNT(*) FROM activities a LEFT JOIN activity_updates u ON u.activity_id=a.id AND u.year=$2 AND u.month=$3 AND u.kind=$4 WHERE a.department_id=$1 AND COALESCE(u.include_in_document, true)=true")
+   .bind(p.department_id).bind(p.year).bind(p.month).bind(&p.kind).fetch_one(&s.db).await.map_err(db)?;
+  if count==0 {return Err(bad("Nema aktivnosti uključenih u dokument. Dodajte aktivnost ili provjerite oznaku 'U dokument'."));}
+ }
  let id:Uuid=sqlx::query_scalar("INSERT INTO department_documents(department_id,year,month,kind,status,submitted_by,submitted_at) VALUES($1,$2,$3,$4,$5,$6,CASE WHEN $5='submitted' THEN now() ELSE NULL END) ON CONFLICT(department_id,year,month,kind) DO UPDATE SET status=EXCLUDED.status,submitted_by=EXCLUDED.submitted_by,submitted_at=EXCLUDED.submitted_at RETURNING id").bind(p.department_id).bind(p.year).bind(p.month).bind(&p.kind).bind(&p.status).bind(c.sub).fetch_one(&s.db).await.map_err(db)?;
  audit(&s,&c,"department.status",Some(id)).await; Ok(Json(json!({"id":id,"status":p.status})))
 }
@@ -135,7 +201,13 @@ async fn build_sector(State(s):State<App>,h:HeaderMap,Json(p):Json<BuildSector>)
   let d=sqlx::query("SELECT name,code FROM departments WHERE id=$1").bind(dept_id).fetch_optional(&s.db).await.map_err(db)?.ok_or_else(||bad("Nepoznat odjel"))?;
   let accepted:Option<String>=sqlx::query_scalar("SELECT status FROM department_documents WHERE department_id=$1 AND year=$2 AND month=$3 AND kind=$4").bind(dept_id).bind(p.year).bind(p.month).bind(&p.kind).fetch_optional(&s.db).await.map_err(db)?;
   if accepted.as_deref()!=Some("submitted") {return Err(bad(format!("Odjel {} još nije predao dokument",d.get::<String,_>("name"))));}
-  let rows=sqlx::query("SELECT a.id,a.parent_id,a.title,a.description,a.type,u.content,u.progress FROM activity_updates u JOIN activities a ON a.id=u.activity_id WHERE a.department_id=$1 AND u.year=$2 AND u.month=$3 AND u.kind=$4 AND u.include_in_document=true ORDER BY a.sort_order,a.created_at").bind(dept_id).bind(p.year).bind(p.month).bind(&p.kind).fetch_all(&s.db).await.map_err(db)?;
+  // Activities are included by default even before a monthly update is saved.
+  // A monthly update supplements the permanent description and may exclude the item.
+  let rows=sqlx::query("SELECT a.id,a.parent_id,a.title,a.description,a.type, COALESCE(u.content, '') AS content, COALESCE(u.progress, 'in_progress') AS progress FROM activities a LEFT JOIN activity_updates u ON u.activity_id=a.id AND u.year=$2 AND u.month=$3 AND u.kind=$4 WHERE a.department_id=$1 AND COALESCE(u.include_in_document, true)=true ORDER BY a.sort_order,a.created_at")
+   .bind(dept_id).bind(p.year).bind(p.month).bind(&p.kind).fetch_all(&s.db).await.map_err(db)?;
+  if rows.is_empty() {
+   return Err(bad(format!("Odjel {} nema nijednu stavku uključenu u dokument. Dodajte aktivnost ili provjerite oznaku 'U dokument'.",d.get::<String,_>("name"))));
+  }
   let items:Vec<Value>=rows.iter().map(|r|json!({"id":r.get::<Uuid,_>("id"),"parent_id":r.get::<Option<Uuid>,_>("parent_id"),"title":r.get::<String,_>("title"),"description":r.get::<String,_>("description"),"type":r.get::<String,_>("type"),"content":r.get::<String,_>("content"),"progress":r.get::<String,_>("progress")})).collect();
   sections.push(json!({"department_id":dept_id,"code":d.get::<String,_>("code"),"name":d.get::<String,_>("name"),"items":items}));
  }
@@ -145,6 +217,57 @@ async fn build_sector(State(s):State<App>,h:HeaderMap,Json(p):Json<BuildSector>)
  let id:Uuid=sqlx::query_scalar("INSERT INTO sector_documents(year,month,kind,title,introduction,conclusion,snapshot,revision,created_by) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING id").bind(p.year).bind(p.month).bind(&p.kind).bind(&title).bind(p.introduction.unwrap_or_default()).bind(p.conclusion.unwrap_or_default()).bind(snapshot).bind(revision).bind(c.sub).fetch_one(&s.db).await.map_err(db)?;
  audit(&s,&c,"sector.build",Some(id)).await; Ok(Json(json!({"id":id,"revision":revision})))
 }
+
+// Editing a sector draft changes ONLY its snapshot, never the underlying activities
+// or submitted department reports. Locked revisions stay immutable.
+#[derive(Deserialize)] struct EditSector {snapshot:Value,introduction:String,conclusion:String}
+async fn edit_sector(State(s):State<App>,h:HeaderMap,Path(id):Path<Uuid>,Json(p):Json<EditSector>)->ResultApi<Json<Value>> {
+ let c=who(&s,&h)?; if !director(&c) {return Err(forbidden());}
+ let row=sqlx::query("SELECT snapshot,status FROM sector_documents WHERE id=$1").bind(id).fetch_optional(&s.db).await.map_err(db)?.ok_or_else(||bad("Dokument nije pronađen"))?;
+ if row.get::<String,_>("status")!="draft" {return Err(bad("Zaključana revizija se ne može mijenjati"));}
+ let old:Value=row.get("snapshot");
+ let original=old.get("sections").and_then(Value::as_array).ok_or_else(||bad("Neispravan izvorni dokument"))?;
+ let sections=p.snapshot.get("sections").and_then(Value::as_array).ok_or_else(||bad("Nedostaju poglavlja"))?;
+ if sections.len()!=original.len() || p.introduction.len()>20000 || p.conclusion.len()>20000 {return Err(bad("Neispravna struktura ili predugačak tekst"));}
+ let mut original_ids=HashSet::new(); let mut original_sections=HashSet::new();
+ for sec in original {
+  let sid=sec.get("department_id").and_then(Value::as_str).ok_or_else(||bad("Nedostaje odjel"))?;
+  original_sections.insert(sid.to_string());
+  for item in sec.get("items").and_then(Value::as_array).ok_or_else(||bad("Nedostaju stavke"))? {
+   let itemid=item.get("id").and_then(Value::as_str).ok_or_else(||bad("Nedostaje ID stavke"))?;
+   original_ids.insert((sid.to_string(),itemid.to_string()));
+  }
+ }
+ let mut seen_sections=HashSet::new(); let mut seen_items=HashSet::new(); let mut new_sections=Vec::new();
+ for sec in sections {
+  let sid=sec.get("department_id").and_then(Value::as_str).ok_or_else(||bad("Nedostaje odjel"))?;
+  if !original_sections.contains(sid) || !seen_sections.insert(sid.to_string()) {return Err(bad("Nevaljan odjel"));}
+  let source=original.iter().find(|s|s.get("department_id").and_then(Value::as_str)==Some(sid)).unwrap();
+  let items=sec.get("items").and_then(Value::as_array).ok_or_else(||bad("Nedostaju stavke"))?;
+  if items.len()>1000 {return Err(bad("Previše stavki"));}
+  let mut cleaned=Vec::new();
+  for item in items {
+   let itemid=item.get("id").and_then(Value::as_str).ok_or_else(||bad("Nedostaje ID stavke"))?;
+   if !original_ids.contains(&(sid.to_string(),itemid.to_string())) || !seen_items.insert(itemid.to_string()) {return Err(bad("Nepoznata ili ponovljena stavka"));}
+   let base=source.get("items").and_then(Value::as_array).unwrap().iter().find(|i|i.get("id").and_then(Value::as_str)==Some(itemid)).unwrap();
+   let title=item.get("title").and_then(Value::as_str).ok_or_else(||bad("Nedostaje naslov"))?;
+   let description=item.get("description").and_then(Value::as_str).unwrap_or("");
+   let content=item.get("content").and_then(Value::as_str).unwrap_or("");
+   if title.trim().is_empty() || title.len()>1000 || description.len()>12000 || content.len()>12000 {return Err(bad("Neispravan naslov ili predugačak opis"));}
+   let mut copy=base.clone(); copy["title"]=json!(title);copy["description"]=json!(description);copy["content"]=json!(content);
+   cleaned.push(copy);
+  }
+  let mut copy=source.clone();copy["items"]=json!(cleaned);new_sections.push(copy);
+ }
+ if seen_items.is_empty() {return Err(bad("Sektorski dokument mora sadržavati barem jednu stavku"));}
+ if new_sections.iter().all(|s| s.get("items").and_then(Value::as_array).map(|a|a.is_empty()).unwrap_or(true)) {return Err(bad("Završni dokument mora sadržavati barem jednu stavku"));}
+ let mut snapshot=old; snapshot["sections"]=json!(new_sections);
+ let n=sqlx::query("UPDATE sector_documents SET snapshot=$2,introduction=$3,conclusion=$4 WHERE id=$1 AND status='draft'")
+  .bind(id).bind(snapshot).bind(p.introduction).bind(p.conclusion).execute(&s.db).await.map_err(db)?.rows_affected();
+ if n==0 {return Err(bad("Dokument je u međuvremenu zaključan"));}
+ audit(&s,&c,"sector.edit",Some(id)).await;Ok(Json(json!({"ok":true})))
+}
+
 async fn lock_sector(State(s):State<App>,h:HeaderMap,Path(id):Path<Uuid>)->ResultApi<Json<Value>> {
  let c=who(&s,&h)?; if !director(&c) {return Err(forbidden());}
  let n=sqlx::query("UPDATE sector_documents SET status='locked',locked_at=now() WHERE id=$1 AND status='draft'").bind(id).execute(&s.db).await.map_err(db)?.rows_affected();
@@ -181,8 +304,13 @@ async fn health()->Json<Value> {Json(json!({"status":"ok"}))}
   .route("/api/departments",get(departments)).route("/api/users",get(users).post(create_user))
   .route("/api/activities",get(activities).post(create_activity)).route("/api/activities/{id}",patch(edit_activity))
   .route("/api/updates",get(updates).post(save_update))
+  .route("/api/updates/carry-forward",post(carry_forward))
+  .route("/api/plan-reference",get(plan_reference))
+  .route("/api/activities/reorder",post(reorder_activities))
+  .route("/api/activities/{id}/move",post(move_activity))
   .route("/api/department-documents",get(department_docs).post(save_department_doc))
   .route("/api/sector-documents",get(sector_docs).post(build_sector))
+  .route("/api/sector-documents/{id}",patch(edit_sector))
   .route("/api/sector-documents/{id}/lock",post(lock_sector))
   .route("/api/sector-documents/{id}/export/{format}",get(export_doc))
   .with_state(app).layer(CorsLayer::new().allow_origin(Any).allow_methods(Any).allow_headers(Any)).layer(TraceLayer::new_for_http());
