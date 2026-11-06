@@ -71,6 +71,103 @@ async fn activities(State(s):State<App>,h:HeaderMap,Query(p):Query<FilterDept>)-
  let rows=sqlx::query("SELECT id,department_id,parent_id,title,description,type,status,sort_order,created_by FROM activities WHERE department_id=$1 ORDER BY sort_order,created_at").bind(p.department_id).fetch_all(&s.db).await.map_err(db)?;
  Ok(Json(Value::Array(rows.iter().map(|r|json!({"id":r.get::<Uuid,_>("id"),"department_id":r.get::<Uuid,_>("department_id"),"parent_id":r.get::<Option<Uuid>,_>("parent_id"),"title":r.get::<String,_>("title"),"description":r.get::<String,_>("description"),"type":r.get::<String,_>("type"),"status":r.get::<String,_>("status"),"sort_order":r.get::<i32,_>("sort_order"),"created_by":r.get::<Option<Uuid>,_>("created_by")})).collect())))
 }
+
+#[derive(Deserialize)]
+struct ActivitySearchFilter {
+ q:String,
+ department_id:Option<Uuid>,
+ year:Option<i32>,
+ month:Option<i32>,
+ kind:Option<String>,
+ limit:Option<i64>,
+}
+fn search_pattern(term:&str)->String {
+ format!("%{}%",term.replace('\\',"\\\\").replace('%',"\\%").replace('_',"\\_"))
+}
+async fn search_activities(State(s):State<App>,h:HeaderMap,Query(p):Query<ActivitySearchFilter>)->ResultApi<Json<Value>> {
+ let c=who(&s,&h)?;
+ let term=p.q.trim();
+ if term.chars().count()<2 || term.chars().count()>120 {return Err(bad("Pretraga zahtijeva 2 do 120 znakova"));}
+ if let Some(y)=p.year {if !(2000..=2100).contains(&y){return Err(bad("Nevaljana godina"));}}
+ if let Some(m)=p.month {if !(1..=12).contains(&m){return Err(bad("Nevaljan mjesec"));}}
+ if let Some(k)=&p.kind {if !["plan","report"].contains(&k.as_str()){return Err(bad("Nevaljana vrsta dokumenta"));}}
+ let scope=if director(&c) {p.department_id} else {
+  let d=c.department_id.ok_or_else(forbidden)?;
+  if p.department_id.is_some() && p.department_id!=Some(d) {return Err(forbidden());}
+  Some(d)
+ };
+ let pattern=search_pattern(term);
+ let rows=sqlx::query(r#"
+ SELECT a.id AS activity_id,a.department_id,d.name AS department_name,
+        a.title,a.description,a.type,a.status,
+        u.year,u.month,u.kind,u.content,u.progress,u.include_in_document,u.updated_at
+ FROM activities a
+ JOIN departments d ON d.id=a.department_id
+ LEFT JOIN activity_updates u ON u.activity_id=a.id
+ WHERE ($1::uuid IS NULL OR a.department_id=$1)
+   AND (a.title ILIKE $2 ESCAPE '\' OR a.description ILIKE $2 ESCAPE '\'
+        OR u.content ILIKE $2 ESCAPE '\')
+   AND ($3::int IS NULL OR u.year=$3)
+   AND ($4::int IS NULL OR u.month=$4)
+   AND ($5::text IS NULL OR u.kind=$5)
+ ORDER BY a.title,u.year DESC NULLS LAST,u.month DESC NULLS LAST,u.kind
+ LIMIT $6
+ "#)
+ .bind(scope).bind(pattern).bind(p.year).bind(p.month).bind(p.kind)
+ .bind(p.limit.unwrap_or(50).clamp(1,100))
+ .fetch_all(&s.db).await.map_err(db)?;
+ Ok(Json(Value::Array(rows.iter().map(|r|json!({
+  "activity_id":r.get::<Uuid,_>("activity_id"),
+  "department_id":r.get::<Uuid,_>("department_id"),
+  "department_name":r.get::<String,_>("department_name"),
+  "title":r.get::<String,_>("title"),
+  "description":r.get::<String,_>("description"),
+  "type":r.get::<String,_>("type"),
+  "status":r.get::<String,_>("status"),
+  "year":r.get::<Option<i32>,_>("year"),
+  "month":r.get::<Option<i32>,_>("month"),
+  "kind":r.get::<Option<String>,_>("kind"),
+  "content":r.get::<Option<String>,_>("content"),
+  "progress":r.get::<Option<String>,_>("progress"),
+  "include_in_document":r.get::<Option<bool>,_>("include_in_document"),
+  "updated_at":r.get::<Option<chrono::DateTime<Utc>>,_>("updated_at")
+ })).collect())))
+}
+async fn activity_history(State(s):State<App>,h:HeaderMap,Path(id):Path<Uuid>)->ResultApi<Json<Value>> {
+ let c=who(&s,&h)?;
+ let a=sqlx::query("SELECT a.id,a.department_id,d.name AS department_name,a.parent_id,a.title,a.description,a.type,a.status FROM activities a JOIN departments d ON d.id=a.department_id WHERE a.id=$1")
+  .bind(id).fetch_optional(&s.db).await.map_err(db)?
+  .ok_or_else(||ErrApi(StatusCode::NOT_FOUND,"Aktivnost nije pronađena".into()))?;
+ let dept:Uuid=a.get("department_id");
+ if !can_read(&c,dept) {return Err(forbidden());}
+ let rows=sqlx::query(r#"
+ SELECT u.id,u.year,u.month,u.kind,u.content,u.progress,u.include_in_document,u.updated_at,
+        usr.full_name AS updated_by_name
+ FROM activity_updates u
+ LEFT JOIN users usr ON usr.id=u.updated_by
+ WHERE u.activity_id=$1
+ ORDER BY u.year DESC,u.month DESC,u.kind
+ "#).bind(id).fetch_all(&s.db).await.map_err(db)?;
+ let entries:Vec<Value>=rows.iter().map(|r|json!({
+  "id":r.get::<Uuid,_>("id"),
+  "year":r.get::<i32,_>("year"),
+  "month":r.get::<i32,_>("month"),
+  "kind":r.get::<String,_>("kind"),
+  "content":r.get::<String,_>("content"),
+  "progress":r.get::<String,_>("progress"),
+  "include_in_document":r.get::<bool,_>("include_in_document"),
+  "updated_at":r.get::<chrono::DateTime<Utc>,_>("updated_at"),
+  "updated_by_name":r.get::<Option<String>,_>("updated_by_name")
+ })).collect();
+ Ok(Json(json!({"activity":{
+  "id":a.get::<Uuid,_>("id"),"department_id":dept,
+  "department_name":a.get::<String,_>("department_name"),
+  "parent_id":a.get::<Option<Uuid>,_>("parent_id"),
+  "title":a.get::<String,_>("title"),"description":a.get::<String,_>("description"),
+  "type":a.get::<String,_>("type"),"status":a.get::<String,_>("status")
+ },"entries":entries})))
+}
+
 #[derive(Deserialize)] struct NewActivity { department_id:Uuid,parent_id:Option<Uuid>,title:String,description:Option<String>,#[serde(rename="type")] activity_type:String,sort_order:Option<i32> }
 async fn create_activity(State(s):State<App>,h:HeaderMap,Json(p):Json<NewActivity>)->ResultApi<Json<Value>> {
  let c=who(&s,&h)?; if !can_write(&c,p.department_id) {return Err(forbidden());}
@@ -180,6 +277,8 @@ async fn health()->Json<Value> {Json(json!({"status":"ok"}))}
   .route("/api/health",get(health)).route("/api/auth/login",post(login)).route("/api/auth/me",get(me))
   .route("/api/departments",get(departments)).route("/api/users",get(users).post(create_user))
   .route("/api/activities",get(activities).post(create_activity)).route("/api/activities/{id}",patch(edit_activity))
+  .route("/api/activity-search",get(search_activities))
+  .route("/api/activities/{id}/history",get(activity_history))
   .route("/api/updates",get(updates).post(save_update))
   .route("/api/department-documents",get(department_docs).post(save_department_doc))
   .route("/api/sector-documents",get(sector_docs).post(build_sector))
@@ -188,4 +287,16 @@ async fn health()->Json<Value> {Json(json!({"status":"ok"}))}
   .with_state(app).layer(CorsLayer::new().allow_origin(Any).allow_methods(Any).allow_headers(Any)).layer(TraceLayer::new_for_http());
  let listener=tokio::net::TcpListener::bind("0.0.0.0:8095").await?;
  tracing::info!("ReportFlow API listening on 8095"); axum::serve(listener,routes).await?; Ok(())
+}
+
+#[cfg(test)]
+mod history_search_tests {
+ use super::search_pattern;
+ #[test] fn wildcard_characters_are_literal() {
+  assert_eq!(search_pattern(r"VHF_100%"),r"%VHF\_100\%%");
+  assert_eq!(search_pattern(r"test\me"),r"%test\\me%");
+ }
+ #[test] fn ordinary_search_is_case_agnostic_at_sql_layer() {
+  assert_eq!(search_pattern("Jadrija"),"%Jadrija%");
+ }
 }
