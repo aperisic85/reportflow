@@ -65,9 +65,19 @@ def populate(payload: RenderRequest) -> bytes:
                 para.paragraph_format.space_after = Pt(3)
                 para.add_run(f'{number}.  ').bold = True
                 para.add_run(item.get('title', '')).bold = True
-                content = item.get('content', '').strip()
-                if content:
-                    para.add_run(' – ' + content)
+                # Keep the permanent description as well as the monthly update.
+                # Legacy snapshots may have copied the description into content;
+                # avoid showing exactly the same text twice in that case.
+                description = (item.get('description') or '').strip()
+                content = (item.get('content') or '').strip()
+                if description:
+                    para.add_run(' – ' + description)
+                if content and content != description:
+                    if description:
+                        para.add_run().add_break()
+                        para.add_run('Mjesečna realizacija: ' + content)
+                    else:
+                        para.add_run(' – ' + content)
                 write(children.get(ident, []), number, depth + 1)
         write(children.get(None, []), str(section_num))
         # Defensive fallback for malformed historical parent relationships.
