@@ -21,6 +21,8 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - run: cargo check
         working-directory: backend
+      - run: cargo test
+        working-directory: backend
   documents:
     runs-on: ubuntu-latest
     steps:
