@@ -67,9 +67,10 @@ async fn users(State(s):State<App>,h:HeaderMap)->ResultApi<Json<Value>> {
 }
 
 #[derive(Deserialize)] struct DashboardFilter { year:i32, month:i32 }
+fn dashboard_period_valid(year:i32,month:i32)->bool { (2000..=2100).contains(&year) && (1..=12).contains(&month) }
 async fn dashboard(State(s):State<App>,h:HeaderMap,Query(p):Query<DashboardFilter>)->ResultApi<Json<Value>> {
  let c=who(&s,&h)?;
- if !(2000..=2100).contains(&p.year) || !(1..=12).contains(&p.month) {
+ if !dashboard_period_valid(p.year,p.month) {
   return Err(bad("Nevaljan mjesec ili godina"));
  }
  let scoped_dept=if director(&c) {None} else {
@@ -484,5 +485,22 @@ mod history_search_tests {
  }
  #[test] fn ordinary_search_is_case_agnostic_at_sql_layer() {
   assert_eq!(search_pattern("Jadrija"),"%Jadrija%");
+ }
+}
+
+#[cfg(test)]
+mod dashboard_tests {
+ use super::dashboard_period_valid;
+ #[test]
+ fn valid_periods() {
+  assert!(dashboard_period_valid(2026,11));
+  assert!(dashboard_period_valid(2000,1));
+  assert!(dashboard_period_valid(2100,12));
+ }
+ #[test]
+ fn invalid_periods() {
+  for (year,month) in [(1999,11),(2101,1),(2026,0),(2026,13)] {
+   assert!(!dashboard_period_valid(year,month));
+  }
  }
 }
