@@ -85,40 +85,30 @@ function App(){
    <nav><button className={tab==='home'?'active':''} onClick={()=>setTab('home')}><BookOpen size={18}/> Početna</button><button className={tab==='entries'?'active':''} onClick={()=>setTab('entries')}><CalendarDays size={18}/> Mjesečni unos</button><button className={tab==='activities'?'active':''} onClick={()=>setTab('activities')}><FolderKanban size={18}/> Registar aktivnosti</button><button className={tab==='history'?'active':''} onClick={()=>{setHistoryActivityId(null);setTab('history');}}><BookOpen size={18}/> Povijest i pretraga</button><button className={tab==='department'?'active':''} onClick={()=>setTab('department')}><ClipboardCheck size={18}/> Izvješće odjela</button>{isDirector&&<button className={tab==='sector'?'active':''} onClick={()=>setTab('sector')}><FileText size={18}/> Sektor / Uprava</button>}{user.role==='admin'&&<button className={tab==='users'?'active':''} onClick={()=>setTab('users')}><Users size={18}/> Korisnici</button>}</nav>
    <div className="sidebar-bottom"><div className="avatar">{user.name.slice(0,1).toUpperCase()}</div><div className="identity"><strong>{user.name}</strong><small>{user.role}</small></div><button title="Odjava" className="icon-button" onClick={()=>{sessionStorage.removeItem('rf_token');setToken(null);setUser(null);}}><LogOut size={18}/></button></div>
   </aside>
-  <main className="main"><header><div><div className="eyebrow">SEKTOR SIGURNOSTI PLOVIDBE</div><h1>{({home:'Početni pregled',entries:'Mjesečni unos aktivnosti',activities:'Registar aktivnosti',history:'Povijest i pretraživanje',department:'Izvješće odjela',sector:'Objedinjavanje za Upravu',users:'Upravljanje korisnicima'} as Record<string,string>)[tab]}</h1><p>Upravljanje planovima, realizacijom i službenim dokumentima.</p></div><button className="outline" onClick={()=>notify(refresh)}><RefreshCw size={16}/> Osvježi</button></header>
+  <main className="main"><header><div><h1>{({home:'Početni pregled',entries:'Mjesečni unos aktivnosti',activities:'Registar aktivnosti',history:'Povijest i pretraživanje',department:'Izvješće odjela',sector:'Objedinjavanje za Upravu',users:'Upravljanje korisnicima'} as Record<string,string>)[tab]}</h1></div><button className="outline" onClick={()=>notify(refresh)}><RefreshCw size={16}/> Osvježi</button></header>
    {error&&<div className="alert danger" role="alert">{error}<button onClick={()=>setError('')}>×</button></div>}{notice&&<div className="alert success" role="status">{notice}<button onClick={()=>setNotice('')}>×</button></div>}
-   {tab!=='users'&&<div className="filters"><label>Odjel<select value={dept} onChange={e=>setDept(e.target.value)} disabled={user.role==='employee'||user.role==='manager'}>{depts.filter(d=>isDirector||d.id===user.department_id).map(d=><option value={d.id} key={d.id}>{d.name}</option>)}</select></label><label>Mjesec<select value={month} onChange={e=>setMonth(Number(e.target.value))}>{Array.from({length:12},(_,i)=><option key={i} value={i+1}>{new Date(2026,i,1).toLocaleString('hr-HR',{month:'long'})}</option>)}</select></label><label>Godina<input type="number" min="2000" max="2100" value={year} onChange={e=>setYear(Number(e.target.value))}/></label>{tab!=='entries'&&<label>Dokument<select value={kind} onChange={e=>setKind(e.target.value)}>{kinds.map(k=><option key={k.value} value={k.value}>{k.label}</option>)}</select></label>}</div>}
+   {tab!=='users'&&tab!=='home'&&<div className="filters"><label>Odjel<select value={dept} onChange={e=>setDept(e.target.value)} disabled={user.role==='employee'||user.role==='manager'}>{depts.filter(d=>isDirector||d.id===user.department_id).map(d=><option value={d.id} key={d.id}>{d.name}</option>)}</select></label><label>Mjesec<select value={month} onChange={e=>setMonth(Number(e.target.value))}>{Array.from({length:12},(_,i)=><option key={i} value={i+1}>{new Date(2026,i,1).toLocaleString('hr-HR',{month:'long'})}</option>)}</select></label><label>Godina<input type="number" min="2000" max="2100" value={year} onChange={e=>setYear(Number(e.target.value))}/></label>{tab!=='entries'&&<label>Dokument<select value={kind} onChange={e=>setKind(e.target.value)}>{kinds.map(k=><option key={k.value} value={k.value}>{k.label}</option>)}</select></label>}</div>}
    {tab==='home'&&<Dashboard user={user} year={year} month={month} onNavigate={(target,departmentId)=>{if(departmentId)setDept(departmentId);setTab(target);}}/>}
    {tab==='history'&&<HistorySearch user={user} depts={depts} initialActivityId={historyActivityId}/>}
    {tab==='entries'&&<section className="panel ux-panel">
     <div className="ux-intro">
-     <div><span className="ux-overline">MJESEČNI RADNI PROSTOR</span><h2>{kind==='plan'?'Izrada mjesečnog plana':'Unos mjesečne realizacije'}</h2>
+     <div><h2>{kind==='plan'?'Izrada mjesečnog plana':'Unos mjesečne realizacije'}</h2>
       <p>{selectedDept?.name} · {new Date(year,month-1,1).toLocaleDateString('hr-HR',{month:'long',year:'numeric'})}</p></div>
      <span className={'chip '+(docStatus==='submitted'?'green':'amber')}>{docStatus==='submitted'?'Dokument je predan':'Dokument u izradi'}</span>
     </div>
     <div className="ux-kind-switch" role="group" aria-label="Odabir vrste unosa">
-     <button type="button" className={kind==='plan'?'active':''} aria-pressed={kind==='plan'} onClick={()=>setKind('plan')}><CalendarDays size={18}/><span><strong>1. Plan</strong><small>Što namjeravamo napraviti?</small></span></button>
-     <button type="button" className={kind==='report'?'active':''} aria-pressed={kind==='report'} onClick={()=>setKind('report')}><ClipboardCheck size={18}/><span><strong>2. Izvješće</strong><small>Što je stvarno realizirano?</small></span></button>
+     <button type="button" className={kind==='plan'?'active':''} aria-pressed={kind==='plan'} onClick={()=>setKind('plan')}>Plan</button>
+     <button type="button" className={kind==='report'?'active':''} aria-pressed={kind==='report'} onClick={()=>setKind('report')}>Izvješće</button>
     </div>
-    <div className={'ux-kind-guidance '+(kind==='plan'?'ux-planning':'ux-reporting')}>
-     <strong>{kind==='plan'?'Unosiš PLAN rada':'Unosiš IZVJEŠĆE o radu'}</strong>
-     <p>{kind==='plan'
-      ?'Za svaku aktivnost napiši konkretne zadatke koje planiraš obaviti u ovom mjesecu. Ne opisuj realizaciju i ne označavaj što je završeno — to se evidentira u izvješću.'
-      :'Za svaku aktivnost napiši što je stvarno napravljeno u ovom mjesecu. Usporedi s prikazanim planom, odaberi status realizacije i kratko objasni eventualna odstupanja.'}</p>
-    </div>
-    <div className="ux-summary-row">
-     <span><strong>{activities.length}</strong> ukupno aktivnosti</span><span><strong>{updates.length}</strong> spremljenih mjesečnih zapisa</span>
-     <span><strong>{Math.max(0,activities.length-updates.length)}</strong> bez mjesečnog unosa</span>
-    </div>
+    <p className="simple-guidance">{kind==='plan'?'Upiši što planiraš napraviti u ovom mjesecu.':'Upiši što je stvarno napravljeno u ovom mjesecu i označi status.'}</p>
+    <p className="simple-counter">{updates.length} od {activities.length} aktivnosti ima mjesečni zapis.</p>
     <div className="ux-toolbar">
      <label>Pronađi aktivnost<input value={entrySearch} onChange={e=>setEntrySearch(e.target.value)} placeholder="Pretraži naziv ili opis aktivnosti"/></label>
      <label>Prikaži<select value={entryFilter} onChange={e=>setEntryFilter(e.target.value)}>
       <option value="all">Sve aktivnosti</option><option value="missing">Bez mjesečnog unosa</option><option value="saved">Sa spremljenim unosom</option>
      </select></label>
     </div>
-    {kind==='report'&&<div className="ux-action-note"><strong>Prijenos nedovršenih stavki:</strong> prenosi samo zapise iz prethodnog mjeseca, ali ne kopira tekst realizacije.
-      <div><button className="outline" disabled={loading||!canSubmit||docStatus==='submitted'} onClick={()=>notify(carry)}><RefreshCw size={16}/> Prenesi nedovršene</button></div>
-    </div>}
+    {kind==='report'&&canSubmit&&<details className="simple-options"><summary>Dodatne radnje</summary><p>Možeš prenijeti nedovršene aktivnosti iz prošlog mjeseca bez prepisivanja njihovih opisa.</p><button className="outline" disabled={loading||docStatus==='submitted'} onClick={()=>notify(carry)}>Prenesi nedovršene</button></details>}
     {activities.length===0?<Empty text="Nema aktivnosti. Prvo dodaj aktivnost u Registru aktivnosti."/>:
      visibleEntries.length===0?<Empty text="Nema aktivnosti koje odgovaraju filtrima."/>:
      <div className="ux-entry-list">{visibleEntries.map(a=><MonthlyEntry
@@ -129,12 +119,12 @@ function App(){
       onSave={(c,p,i)=>notify(()=>saveUpdate(a.id,c,p,i))} busy={loading}/>)}</div>}
    </section>}
    {tab==='activities'&&<><section className="panel ux-panel">
-    <div className="ux-intro"><div><span className="ux-overline">KATALOG AKTIVNOSTI</span><h2>Registar aktivnosti</h2>
-     <p>Ovdje održavaš trajni popis projekata i poslova. <strong>Mjesečni planovi i realizacije unose se zasebno u Mjesečnom unosu.</strong></p></div>
+    <div className="ux-intro"><div><h2>Registar aktivnosti</h2>
+     <p>Trajni popis poslova i projekata.</p></div>
      <span className="chip">{activities.length} aktivnosti</span>
     </div>
     <div className="ux-toolbar"><label>Pronađi aktivnost<input value={registrySearch} onChange={e=>setRegistrySearch(e.target.value)} placeholder="Naziv ili opis projekta / aktivnosti"/></label>
-     <button type="button" className="outline" onClick={()=>setTab('entries')}><CalendarDays size={16}/> Otvori mjesečni unos</button>
+     <button type="button" className="outline" onClick={()=>setTab('entries')}>Mjesečni unos</button>
     </div>
     {visibleRegistry.length===0?<Empty text="Nema aktivnosti koje odgovaraju pretrazi."/>:
      <div className="ux-registry-list">{visibleRegistry.map(a=><article className="ux-registry-item" key={a.id}>
@@ -143,11 +133,11 @@ function App(){
        <div><strong>{a.title}</strong><small>{a.type==='project'?'Projekt':a.type==='ongoing'?'Trajna aktivnost':'Jednokratna aktivnost'}</small></div>
       </div>
       <div className="ux-registry-actions">
-       <span className="chip">{statusNames[a.status]}</span>
+       <span className="simple-registry-status">{statusNames[a.status]}</span>
        <button type="button" className="outline compact" onClick={()=>toggleRegistryDetails(a.id)}>{registryDetails.includes(a.id)?'Sakrij detalje':'Detalji'}</button>
        <button type="button" className="outline compact" onClick={()=>{setHistoryActivityId(a.id);setTab('history');}}>Povijest</button>
       </div></div>
-      {a.description&&<p className="ux-registry-description">{a.description}</p>}
+      {a.description&&registryDetails.includes(a.id)&&<p className="ux-registry-description">{a.description}</p>}
       {registryDetails.includes(a.id)&&<div className="ux-registry-details">
        {canSubmit&&<label>Nadređena aktivnost<select value={a.parent_id||''} disabled={loading} onChange={e=>notify(()=>moveParent(a.id,e.target.value||null))}>
         <option value="">Bez nadređene aktivnosti</option>
@@ -159,8 +149,7 @@ function App(){
        </div>}
       </div>}
      </article>)}</div>}
-   </section>{canEdit&&<section className="panel ux-panel">
-    <div className="ux-intro"><div><h2>Dodaj novu aktivnost</h2><p>Unesi naziv i osnovni opis posla. Plan po mjesecima popunjava se kasnije.</p></div></div>
+   </section>{canEdit&&<details className="panel simple-create"><summary>+ Nova aktivnost</summary>
     <form onSubmit={e=>{e.preventDefault();notify(saveActivity);}} className="form-grid">
      <label className="wide">Naziv aktivnosti<input required value={newTitle} onChange={e=>setNewTitle(e.target.value)} placeholder="Npr. Modernizacija VHF sustava"/></label>
      <label className="wide">Osnovni opis aktivnosti<textarea rows={3} value={newDescription} onChange={e=>setNewDescription(e.target.value)} placeholder="O čemu se radi? Što obuhvaća ova aktivnost?"/></label>
@@ -168,7 +157,7 @@ function App(){
      <label>Nadređena aktivnost<select value={newParent} onChange={e=>setNewParent(e.target.value)}><option value="">Bez nadređene aktivnosti</option>{activities.map(a=><option value={a.id} key={a.id}>{a.title}</option>)}</select></label>
      <button type="submit" className="primary" disabled={loading}><Plus size={17}/> Dodaj aktivnost</button>
     </form>
-   </section>}</>}
+   </details>}</>}
    {tab==='department'&&<section className="panel"><div className="panel-head"><div><h2>{kind==='plan'?'Plan':'Izvješće'} odjela</h2><p>Predajom se zaključava uređivanje mjesečnih zapisa dok voditelj ne vrati dokument u nacrt.</p></div><span className={'chip '+(docStatus==='submitted'?'green':'amber')}>{docStatus==='submitted'?'Predano':'Nacrt'}</span></div><div className="summary"><div><strong>{activities.length}</strong><small>Aktivnosti u registru</small></div><div><strong>{updates.length}</strong><small>Mjesečnih zapisa</small></div><div><strong>{includedActivities.length}</strong><small>U dokumentu</small></div></div><h3>Pregled sadržaja</h3>{includedActivities.length?includedActivities.map(a=><div className="activity-row" key={a.id}><div><strong>{a.parent_id?'↳ ':''}{a.title}</strong>{previewContent(a).description&&<p>{previewContent(a).description}</p>}{previewContent(a).monthly&&<p><strong>{kind==='plan'?'Mjesečni plan:':'Mjesečna realizacija:'}</strong> {previewContent(a).monthly}</p>}</div></div>):<Empty text="Nema aktivnosti uključenih u dokument. Dodajte aktivnost ili označite 'U dokument'."/>}{canSubmit&&<div className="actions"><button className="primary" disabled={loading||(docStatus!=='submitted'&&includedActivities.length===0)} onClick={()=>notify(async()=>{await post('/department-documents',{department_id:dept,year,month,kind,status:docStatus==='submitted'?'draft':'submitted'});await refresh();})}>{docStatus==='submitted'?'Vrati u nacrt':kind==='plan'?'Predaj plan odjela':'Predaj izvješće odjela'}</button></div>}</section>}
    {tab==='sector'&&isDirector&&<><section className="panel"><div className="panel-head"><div><h2>Izrada završnog dokumenta</h2><p>Objedinjuju se predani dokumenti odjela. Izrada stvara novu reviziju, koju možete urediti prije zaključavanja.</p></div><Shield size={22}/></div><div className="checkbox-list">{depts.map(d=><label key={d.id}><input type="checkbox" checked={chosen.includes(d.id)} onChange={e=>setChosen(p=>e.target.checked?[...p,d.id]:p.filter(x=>x!==d.id))}/>{d.name}</label>)}</div><label>Uvod<textarea rows={3} value={intro} onChange={e=>setIntro(e.target.value)} placeholder="Neobavezna napomena direktora sektora"/></label><label>Zaključak<textarea rows={3} value={conclusion} onChange={e=>setConclusion(e.target.value)} placeholder="Neobavezni zaključak"/></label><div className="actions"><button className="primary" disabled={loading||chosen.length===0} onClick={()=>notify(build)}>Izradi objedinjeni dokument</button></div></section><section className="panel"><h2>Verzije dokumenta</h2>{docs.length===0?<Empty text="Za ovo razdoblje još nema objedinjenih dokumenata."/>:docs.map(d=><div className="document-row" key={d.id}><div><strong>{d.title}</strong><p>Revizija {d.revision} · {d.snapshot.sections.length} odjela · {d.snapshot.sections.reduce((n,s)=>n+s.items.length,0)} stavki · {new Date(d.created_at).toLocaleDateString('hr-HR')}</p></div><span className={'chip '+(d.status==='locked'?'green':'amber')}>{d.status==='locked'?'Zaključano':'Nacrt'}</span><div className="document-actions">{d.status==='draft'&&<button className="outline" onClick={()=>setSelectedDraft(d)}><PenLine size={16}/> Uredi / pregledaj</button>}<button className="outline" onClick={()=>notify(()=>download(d.id,'docx'))}><FileDown size={16}/> Word</button><button className="outline" onClick={()=>notify(()=>download(d.id,'pdf'))}><FileDown size={16}/> PDF</button>{d.status==='draft'&&<button className="primary" onClick={()=>notify(async()=>{await post(`/sector-documents/${d.id}/lock`,{});setSelectedDraft(null);await refresh();})}>Zaključaj</button>}</div></div>)}</section>{selectedDraft&&<SectorEditor key={selectedDraft.id} doc={selectedDraft} busy={loading} onCancel={()=>setSelectedDraft(null)} onSave={(snap,opening,closing)=>notify(()=>saveSectorDraft(snap,opening,closing))}/>}</>}
    {tab==='users'&&user.role==='admin'&&<><section className="panel"><h2>Korisnici</h2><div className="activities-list">{people.map(p=><div className="activity-row" key={p.username}><div><strong>{p.full_name}</strong><p>{p.username} · {p.role} · {depts.find(d=>d.id===p.department_id)?.name||'Razina sektora'}</p></div></div>)}</div></section><section className="panel"><h2>Dodaj korisnika</h2><form className="form-grid" onSubmit={e=>{e.preventDefault();notify(saveUser);}}><label>Kor. ime<input required value={newUser.username} onChange={e=>setNewUser({...newUser,username:e.target.value})}/></label><label>Ime i prezime<input required value={newUser.full_name} onChange={e=>setNewUser({...newUser,full_name:e.target.value})}/></label><label>Lozinka (min. 10 znakova)<input required type="password" minLength={10} value={newUser.password} onChange={e=>setNewUser({...newUser,password:e.target.value})}/></label><label>Uloga<select value={newUser.role} onChange={e=>setNewUser({...newUser,role:e.target.value})}><option value="employee">Djelatnik</option><option value="manager">Voditelj odjela</option><option value="director">Direktor sektora</option><option value="admin">Administrator</option></select></label><label>Odjel<select value={newUser.department_id} onChange={e=>setNewUser({...newUser,department_id:e.target.value})}><option value="">Bez odjela</option>{depts.map(d=><option key={d.id} value={d.id}>{d.name}</option>)}</select></label><div className="actions"><button className="primary" disabled={loading}>Dodaj korisnika</button></div></form></section></>}
