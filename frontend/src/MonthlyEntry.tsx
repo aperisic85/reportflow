@@ -8,7 +8,6 @@ type Props={
  onSave:(content:string,progress:string,include:boolean)=>void;
 };
 const labels:Record<string,string>={in_progress:'U tijeku',completed:'Završeno',postponed:'Odgođeno',not_started:'Nije započeto'};
-const typeName:Record<string,string>={ongoing:'Trajna aktivnost',project:'Projekt',one_off:'Jednokratna'};
 export default function MonthlyEntry({item,initial,planReference,kind,disabled,busy,onSave}:Props){
  const [content,setContent]=useState(initial?.content??'');
  const [progress,setProgress]=useState(initial?.progress??(kind==='plan'?'not_started':'in_progress'));
