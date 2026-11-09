@@ -65,6 +65,65 @@ async fn users(State(s):State<App>,h:HeaderMap)->ResultApi<Json<Value>> {
  let rows=sqlx::query("SELECT id,username,full_name,role,department_id,active FROM users ORDER BY full_name").fetch_all(&s.db).await.map_err(db)?;
  Ok(Json(Value::Array(rows.iter().map(|r|json!({"id":r.get::<Uuid,_>("id"),"username":r.get::<String,_>("username"),"full_name":r.get::<String,_>("full_name"),"role":r.get::<String,_>("role"),"department_id":r.get::<Option<Uuid>,_>("department_id"),"active":r.get::<bool,_>("active")})).collect())))
 }
+
+#[derive(Deserialize)] struct DashboardFilter { year:i32, month:i32 }
+fn dashboard_period_valid(year:i32,month:i32)->bool { (2000..=2100).contains(&year) && (1..=12).contains(&month) }
+async fn dashboard(State(s):State<App>,h:HeaderMap,Query(p):Query<DashboardFilter>)->ResultApi<Json<Value>> {
+ let c=who(&s,&h)?;
+ if !dashboard_period_valid(p.year,p.month) {
+  return Err(bad("Nevaljan mjesec ili godina"));
+ }
+ let scoped_dept=if director(&c) {None} else {
+  Some(c.department_id.ok_or_else(forbidden)?)
+ };
+ // Counts are sourced from distinct activities, never from a join with multiple updates.
+ let departments=sqlx::query(r#"
+ SELECT d.id,d.name,d.code,
+   (SELECT COUNT(*) FROM activities a WHERE a.department_id=d.id) AS total,
+   (SELECT COUNT(*) FROM activities a WHERE a.department_id=d.id AND a.status='in_progress') AS active,
+   (SELECT COUNT(*) FROM activities a WHERE a.department_id=d.id AND a.status='completed') AS completed,
+   (SELECT COUNT(*) FROM activity_updates u JOIN activities a ON a.id=u.activity_id
+     WHERE a.department_id=d.id AND u.year=$2 AND u.month=$3 AND u.kind='report') AS monthly_updates,
+   (SELECT COUNT(*) FROM activity_updates u JOIN activities a ON a.id=u.activity_id
+     WHERE a.department_id=d.id AND u.year=$2 AND u.month=$3 AND u.kind='report'
+       AND u.progress='completed') AS monthly_completed,
+   COALESCE((SELECT dd.status FROM department_documents dd
+      WHERE dd.department_id=d.id AND dd.year=$2 AND dd.month=$3 AND dd.kind='report'),'draft') AS report_status,
+   COALESCE((SELECT dd.status FROM department_documents dd
+      WHERE dd.department_id=d.id AND dd.year=$2 AND dd.month=$3 AND dd.kind='plan'),'draft') AS plan_status
+ FROM departments d WHERE ($1::uuid IS NULL OR d.id=$1)
+ ORDER BY d.sort_order,d.name
+ "#).bind(scoped_dept).bind(p.year).bind(p.month).fetch_all(&s.db).await.map_err(db)?;
+ let recent=sqlx::query(r#"
+ SELECT u.activity_id,a.title,d.name AS department_name,u.year,u.month,u.kind,
+        u.content,u.progress,u.updated_at
+ FROM activity_updates u JOIN activities a ON a.id=u.activity_id
+ JOIN departments d ON d.id=a.department_id
+ WHERE ($1::uuid IS NULL OR d.id=$1)
+ ORDER BY u.updated_at DESC,u.id DESC LIMIT 8
+ "#).bind(scoped_dept).fetch_all(&s.db).await.map_err(db)?;
+ Ok(Json(json!({
+  "year":p.year,"month":p.month,
+  "departments":departments.iter().map(|r|json!({
+   "id":r.get::<Uuid,_>("id"),"name":r.get::<String,_>("name"),"code":r.get::<String,_>("code"),
+   "total":r.get::<i64,_>("total"),"active":r.get::<i64,_>("active"),
+   "completed":r.get::<i64,_>("completed"),
+   "monthly_updates":r.get::<i64,_>("monthly_updates"),
+   "monthly_completed":r.get::<i64,_>("monthly_completed"),
+   "report_status":r.get::<String,_>("report_status"),
+   "plan_status":r.get::<String,_>("plan_status")
+  })).collect::<Vec<_>>(),
+  "recent":recent.iter().map(|r|json!({
+   "activity_id":r.get::<Uuid,_>("activity_id"),"title":r.get::<String,_>("title"),
+   "department_name":r.get::<String,_>("department_name"),
+   "year":r.get::<i32,_>("year"),"month":r.get::<i32,_>("month"),
+   "kind":r.get::<String,_>("kind"),
+   "content":r.get::<String,_>("content"),"progress":r.get::<String,_>("progress"),
+   "updated_at":r.get::<chrono::DateTime<Utc>,_>("updated_at")
+  })).collect::<Vec<_>>()
+ })))
+}
+
 #[derive(Deserialize)] struct FilterDept {department_id:Uuid}
 async fn activities(State(s):State<App>,h:HeaderMap,Query(p):Query<FilterDept>)->ResultApi<Json<Value>> {
  let c=who(&s,&h)?; if !can_read(&c,p.department_id) {return Err(forbidden());}
@@ -398,6 +457,7 @@ async fn health()->Json<Value> {Json(json!({"status":"ok"}))}
  let routes=Router::new()
   .route("/api/health",get(health)).route("/api/auth/login",post(login)).route("/api/auth/me",get(me))
   .route("/api/departments",get(departments)).route("/api/users",get(users).post(create_user))
+  .route("/api/dashboard",get(dashboard))
   .route("/api/activities",get(activities).post(create_activity)).route("/api/activities/{id}",patch(edit_activity))
   .route("/api/activity-search",get(search_activities))
   .route("/api/activities/{id}/history",get(activity_history))
@@ -425,5 +485,22 @@ mod history_search_tests {
  }
  #[test] fn ordinary_search_is_case_agnostic_at_sql_layer() {
   assert_eq!(search_pattern("Jadrija"),"%Jadrija%");
+ }
+}
+
+#[cfg(test)]
+mod dashboard_tests {
+ use super::dashboard_period_valid;
+ #[test]
+ fn valid_periods() {
+  assert!(dashboard_period_valid(2026,11));
+  assert!(dashboard_period_valid(2000,1));
+  assert!(dashboard_period_valid(2100,12));
+ }
+ #[test]
+ fn invalid_periods() {
+  for (year,month) in [(1999,11),(2101,1),(2026,0),(2026,13)] {
+   assert!(!dashboard_period_valid(year,month));
+  }
  }
 }
