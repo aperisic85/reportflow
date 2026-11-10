@@ -13,7 +13,7 @@ export default function ActivityConversation({activityId,canManage,onClose,openT
  const [chosen,setChosen]=useState<string[]>([]),[addPerson,setAddPerson]=useState(''),[message,setMessage]=useState('');
  const [busy,setBusy]=useState(false),[error,setError]=useState('');
  const reload=useCallback(async()=>{try{const [ts,ps]=await Promise.all([api<Thread[]>('/activities/'+activityId+'/threads'),api<Person[]>('/activities/'+activityId+'/people')]);setThreads(ts);setPeople(ps);}catch(e){setError(e instanceof Error?e.message:String(e));}},[activityId]);
- const detailLoad=useCallback(async(id:string)=>{try{setDetail(await api<Detail>('/threads/'+id));await post('/threads/'+id+'/read',{});}catch(e){setError(e instanceof Error?e.message:String(e));}},[]);
+ const detailLoad=useCallback(async(id:string)=>{try{setDetail(await api<Detail>('/threads/'+id));await post('/threads/'+id+'/read',{}).catch(()=>{});}catch(e){setError(e instanceof Error?e.message:String(e));}},[]);
  useEffect(()=>{setSelected(openThread??null);void reload();},[activityId,openThread,reload]);
  useEffect(()=>{if(selected)void detailLoad(selected);else setDetail(null);},[selected,detailLoad]);
  const perform=async(action:()=>Promise<unknown>)=>{setBusy(true);setError('');try{await action();await reload();if(selected)await detailLoad(selected);}catch(e){setError(e instanceof Error?e.message:String(e));}finally{setBusy(false);}};
