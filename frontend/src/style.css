@@ -524,3 +524,6 @@ button:focus-visible,summary:focus-visible{outline:3px solid #e58d1a;outline-off
 .report-version-row{display:flex;gap:15px;justify-content:space-between;align-items:center;padding:10px 0;border-bottom:1px solid #eee4d7}
 .report-version-row span{font-size:13px}
 @media(max-width:700px){.collab-list>button,.inbox-list>button,.report-version-row{flex-direction:column;align-items:flex-start}.collab-panel{padding:14px}.report-reader{padding:24px 18px}.inbox-meta{align-items:flex-start}}
+
+.monthly-timestamp{display:block;color:#75685b;font-size:11px;font-variant-numeric:tabular-nums}
+.ux-registry-actions .outline svg{vertical-align:middle}
