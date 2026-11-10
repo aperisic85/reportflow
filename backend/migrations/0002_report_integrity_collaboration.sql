@@ -58,3 +58,41 @@ CREATE INDEX thread_events_idx ON activity_thread_events(thread_id,created_at DE
 -- Per-user read state supports an inbox without materializing one notification per message.
 ALTER TABLE activity_thread_participants ADD COLUMN last_read_at TIMESTAMPTZ NOT NULL DEFAULT '-infinity'::timestamptz;
 CREATE INDEX thread_messages_unread_idx ON activity_thread_messages(thread_id,created_at DESC);
+
+-- Every monthly-plan/report edit is retained as an immutable event; old rows
+-- receive a baseline copy using their last known timestamp.
+CREATE TABLE activity_update_revisions (
+ id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+ update_id UUID NOT NULL REFERENCES activity_updates(id),
+ activity_id UUID NOT NULL REFERENCES activities(id),
+ year INT NOT NULL,
+ month INT NOT NULL,
+ kind TEXT NOT NULL,
+ content TEXT NOT NULL,
+ progress TEXT NOT NULL,
+ include_in_document BOOLEAN NOT NULL,
+ author_id UUID REFERENCES users(id),
+ changed_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+INSERT INTO activity_update_revisions(update_id,activity_id,year,month,kind,content,progress,include_in_document,author_id,changed_at)
+ SELECT id,activity_id,year,month,kind,content,progress,include_in_document,updated_by,updated_at FROM activity_updates;
+CREATE OR REPLACE FUNCTION record_activity_update_revision() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+ INSERT INTO activity_update_revisions(update_id,activity_id,year,month,kind,content,progress,include_in_document,author_id,changed_at)
+ VALUES(NEW.id,NEW.activity_id,NEW.year,NEW.month,NEW.kind,NEW.content,NEW.progress,NEW.include_in_document,NEW.updated_by,NEW.updated_at);
+ RETURN NEW;
+END $$;
+CREATE TRIGGER activity_update_revision_capture AFTER INSERT OR UPDATE OF content,progress,include_in_document,updated_by,updated_at
+ON activity_updates FOR EACH ROW EXECUTE FUNCTION record_activity_update_revision();
+CREATE INDEX update_revisions_idx ON activity_update_revisions(activity_id,year,month,kind,changed_at DESC);
+
+CREATE TABLE sector_document_edits (
+ id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+ sector_document_id UUID NOT NULL REFERENCES sector_documents(id),
+ snapshot JSONB NOT NULL,
+ introduction TEXT NOT NULL,
+ conclusion TEXT NOT NULL,
+ edited_by UUID NOT NULL REFERENCES users(id),
+ edited_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX sector_document_edits_idx ON sector_document_edits(sector_document_id,edited_at DESC);
