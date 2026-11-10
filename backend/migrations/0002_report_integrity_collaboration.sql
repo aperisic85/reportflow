@@ -54,3 +54,7 @@ CREATE TABLE activity_thread_events (
  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 CREATE INDEX thread_events_idx ON activity_thread_events(thread_id,created_at DESC);
+
+-- Per-user read state supports an inbox without materializing one notification per message.
+ALTER TABLE activity_thread_participants ADD COLUMN last_read_at TIMESTAMPTZ NOT NULL DEFAULT '-infinity'::timestamptz;
+CREATE INDEX thread_messages_unread_idx ON activity_thread_messages(thread_id,created_at DESC);
