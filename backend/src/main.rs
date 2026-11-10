@@ -333,13 +333,54 @@ async fn department_docs(State(s):State<App>,h:HeaderMap,Query(p):Query<PeriodFi
 async fn save_department_doc(State(s):State<App>,h:HeaderMap,Json(p):Json<SubmitDept>)->ResultApi<Json<Value>> {
  let c=who(&s,&h)?; if !can_manage(&c,p.department_id) {return Err(forbidden());} check_period(p.year,p.month,&p.kind)?;
  if !["draft","submitted"].contains(&p.status.as_str()) {return Err(bad("Nevaljan status dokumenta"));}
- if p.status=="submitted" {
-  let count:i64=sqlx::query_scalar("SELECT COUNT(*) FROM activities a LEFT JOIN activity_updates u ON u.activity_id=a.id AND u.year=$2 AND u.month=$3 AND u.kind=$4 WHERE a.department_id=$1 AND COALESCE(u.include_in_document, true)=true")
-   .bind(p.department_id).bind(p.year).bind(p.month).bind(&p.kind).fetch_one(&s.db).await.map_err(db)?;
-  if count==0 {return Err(bad("Nema aktivnosti uključenih u dokument. Dodajte aktivnost ili provjerite oznaku 'U dokument'."));}
+ let mut tx=s.db.begin().await.map_err(db)?;
+ // Protect the version sequence from concurrent submissions.
+ let doc=sqlx::query("INSERT INTO department_documents(department_id,year,month,kind,status,submitted_by,submitted_at) VALUES($1,$2,$3,$4,'draft',NULL,NULL) ON CONFLICT(department_id,year,month,kind) DO UPDATE SET id=department_documents.id RETURNING id")
+  .bind(p.department_id).bind(p.year).bind(p.month).bind(&p.kind).fetch_one(&mut *tx).await.map_err(db)?;
+ let id:Uuid=doc.get("id");
+ let old: String=sqlx::query_scalar("SELECT status FROM department_documents WHERE id=$1 FOR UPDATE").bind(id).fetch_one(&mut *tx).await.map_err(db)?;
+ let mut version:Option<i32>=None;
+ if p.status=="submitted" && old!="submitted" {
+  let rows=sqlx::query("SELECT a.id,a.title,a.description,a.parent_id,a.type,a.status,COALESCE(u.content,'') AS content,COALESCE(u.progress,'in_progress') AS progress FROM activities a LEFT JOIN activity_updates u ON u.activity_id=a.id AND u.year=$2 AND u.month=$3 AND u.kind=$4 WHERE a.department_id=$1 AND COALESCE(u.include_in_document,true)=true ORDER BY a.sort_order,a.created_at")
+   .bind(p.department_id).bind(p.year).bind(p.month).bind(&p.kind).fetch_all(&mut *tx).await.map_err(db)?;
+  if rows.is_empty(){return Err(bad("Nema aktivnosti uključenih u dokument"));}
+  let items:Vec<Value>=rows.iter().map(|r|json!({
+   "id":r.get::<Uuid,_>("id"),"title":r.get::<String,_>("title"),"description":r.get::<String,_>("description"),
+   "parent_id":r.get::<Option<Uuid>,_>("parent_id"),"type":r.get::<String,_>("type"),"status":r.get::<String,_>("status"),
+   "content":r.get::<String,_>("content"),"progress":r.get::<String,_>("progress")
+  })).collect();
+  let next:i32=sqlx::query_scalar("SELECT COALESCE(MAX(version),0)+1 FROM department_document_versions WHERE department_document_id=$1")
+   .bind(id).fetch_one(&mut *tx).await.map_err(db)?;
+  sqlx::query("INSERT INTO department_document_versions(department_document_id,version,snapshot,submitted_by) VALUES($1,$2,$3,$4)")
+   .bind(id).bind(next).bind(json!({"department_id":p.department_id,"year":p.year,"month":p.month,"kind":p.kind,"items":items})).bind(c.sub).execute(&mut *tx).await.map_err(db)?;
+  version=Some(next);
  }
- let id:Uuid=sqlx::query_scalar("INSERT INTO department_documents(department_id,year,month,kind,status,submitted_by,submitted_at) VALUES($1,$2,$3,$4,$5,$6,CASE WHEN $5='submitted' THEN now() ELSE NULL END) ON CONFLICT(department_id,year,month,kind) DO UPDATE SET status=EXCLUDED.status,submitted_by=EXCLUDED.submitted_by,submitted_at=EXCLUDED.submitted_at RETURNING id").bind(p.department_id).bind(p.year).bind(p.month).bind(&p.kind).bind(&p.status).bind(c.sub).fetch_one(&s.db).await.map_err(db)?;
- audit(&s,&c,"department.status",Some(id)).await; Ok(Json(json!({"id":id,"status":p.status})))
+ if p.status=="submitted" {
+  sqlx::query("UPDATE department_documents SET status='submitted',submitted_by=$2,submitted_at=COALESCE(submitted_at,now()) WHERE id=$1")
+   .bind(id).bind(c.sub).execute(&mut *tx).await.map_err(db)?;
+ } else {
+  sqlx::query("UPDATE department_documents SET status='draft',submitted_at=NULL WHERE id=$1")
+   .bind(id).execute(&mut *tx).await.map_err(db)?;
+ }
+ tx.commit().await.map_err(db)?;
+ audit(&s,&c,if p.status=="submitted" {"department.submit"} else {"department.reopen"},Some(id)).await;
+ Ok(Json(json!({"id":id,"status":p.status,"new_version":version})))
+}
+
+#[derive(Deserialize)] struct VersionsFilter {department_id:Uuid,year:i32,month:i32,kind:String}
+async fn department_versions(State(s):State<App>,h:HeaderMap,Query(p):Query<VersionsFilter>)->ResultApi<Json<Value>> {
+ let c=who(&s,&h)?;if !can_read(&c,p.department_id){return Err(forbidden());}check_period(p.year,p.month,&p.kind)?;
+ let rows=sqlx::query("SELECT v.id,v.version,v.snapshot,v.submitted_at,u.full_name AS author FROM department_document_versions v JOIN department_documents d ON d.id=v.department_document_id JOIN users u ON u.id=v.submitted_by WHERE d.department_id=$1 AND d.year=$2 AND d.month=$3 AND d.kind=$4 ORDER BY v.version DESC")
+ .bind(p.department_id).bind(p.year).bind(p.month).bind(&p.kind).fetch_all(&s.db).await.map_err(db)?;
+ Ok(Json(Value::Array(rows.iter().map(|r|json!({"id":r.get::<Uuid,_>("id"),"version":r.get::<i32,_>("version"),
+ "snapshot":r.get::<Value,_>("snapshot"),"submitted_at":r.get::<chrono::DateTime<Utc>,_>("submitted_at"),"author":r.get::<String,_>("author")})).collect())))
+}
+#[derive(Deserialize)] struct SectorFreshnessFilter {year:i32,month:i32,kind:String}
+async fn sector_freshness(State(s):State<App>,h:HeaderMap,Query(p):Query<SectorFreshnessFilter>)->ResultApi<Json<Value>> {
+ let c=who(&s,&h)?;if !director(&c){return Err(forbidden());}check_period(p.year,p.month,&p.kind)?;
+ let rows=sqlx::query("SELECT dd.department_id, COALESCE(MAX(v.version),0) AS version FROM department_documents dd LEFT JOIN department_document_versions v ON v.department_document_id=dd.id WHERE dd.year=$1 AND dd.month=$2 AND dd.kind=$3 GROUP BY dd.department_id")
+ .bind(p.year).bind(p.month).bind(&p.kind).fetch_all(&s.db).await.map_err(db)?;
+ Ok(Json(Value::Array(rows.iter().map(|r|json!({"department_id":r.get::<Uuid,_>("department_id"),"version":r.get::<i64,_>("version")})).collect())))
 }
 #[derive(Deserialize)] struct SectorFilter {year:i32,month:i32,kind:String}
 async fn sector_docs(State(s):State<App>,h:HeaderMap,Query(p):Query<SectorFilter>)->ResultApi<Json<Value>> {
@@ -364,7 +405,9 @@ async fn build_sector(State(s):State<App>,h:HeaderMap,Json(p):Json<BuildSector>)
    return Err(bad(format!("Odjel {} nema nijednu stavku uključenu u dokument. Dodajte aktivnost ili provjerite oznaku 'U dokument'.",d.get::<String,_>("name"))));
   }
   let items:Vec<Value>=rows.iter().map(|r|json!({"id":r.get::<Uuid,_>("id"),"parent_id":r.get::<Option<Uuid>,_>("parent_id"),"title":r.get::<String,_>("title"),"description":r.get::<String,_>("description"),"type":r.get::<String,_>("type"),"content":r.get::<String,_>("content"),"progress":r.get::<String,_>("progress")})).collect();
-  sections.push(json!({"department_id":dept_id,"code":d.get::<String,_>("code"),"name":d.get::<String,_>("name"),"items":items}));
+  let source_version:Option<i32>=sqlx::query_scalar("SELECT MAX(v.version) FROM department_document_versions v JOIN department_documents dd ON dd.id=v.department_document_id WHERE dd.department_id=$1 AND dd.year=$2 AND dd.month=$3 AND dd.kind=$4")
+   .bind(dept_id).bind(p.year).bind(p.month).bind(&p.kind).fetch_one(&s.db).await.map_err(db)?;
+  sections.push(json!({"department_id":dept_id,"code":d.get::<String,_>("code"),"name":d.get::<String,_>("name"),"source_version":source_version,"items":items}));
  }
  let title=format!("{} značajnijih aktivnosti za {:02}.{}.",if p.kind=="plan" {"PLAN"}else{"IZVJEŠĆE"},p.month,p.year);
  let snapshot=json!({"year":p.year,"month":p.month,"kind":p.kind,"title":title,"sections":sections});
@@ -467,6 +510,8 @@ async fn health()->Json<Value> {Json(json!({"status":"ok"}))}
   .route("/api/activities/reorder",post(reorder_activities))
   .route("/api/activities/{id}/move",post(move_activity))
   .route("/api/department-documents",get(department_docs).post(save_department_doc))
+  .route("/api/department-document-versions",get(department_versions))
+  .route("/api/sector-document-freshness",get(sector_freshness))
   .route("/api/sector-documents",get(sector_docs).post(build_sector))
   .route("/api/sector-documents/{id}",patch(edit_sector))
   .route("/api/sector-documents/{id}/lock",post(lock_sector))
