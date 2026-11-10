@@ -536,16 +536,14 @@ async fn build_sector(State(s):State<App>,h:HeaderMap,Json(p):Json<BuildSector>)
   let d=sqlx::query("SELECT name,code FROM departments WHERE id=$1").bind(dept_id).fetch_optional(&s.db).await.map_err(db)?.ok_or_else(||bad("Nepoznat odjel"))?;
   let accepted:Option<String>=sqlx::query_scalar("SELECT status FROM department_documents WHERE department_id=$1 AND year=$2 AND month=$3 AND kind=$4").bind(dept_id).bind(p.year).bind(p.month).bind(&p.kind).fetch_optional(&s.db).await.map_err(db)?;
   if accepted.as_deref()!=Some("submitted") {return Err(bad(format!("Odjel {} još nije predao dokument",d.get::<String,_>("name"))));}
-  // Activities are included by default even before a monthly update is saved.
-  // A monthly update supplements the permanent description and may exclude the item.
-  let rows=sqlx::query("SELECT a.id,a.parent_id,a.title,a.description,a.type, COALESCE(u.content, '') AS content, COALESCE(u.progress, 'in_progress') AS progress FROM activities a LEFT JOIN activity_updates u ON u.activity_id=a.id AND u.year=$2 AND u.month=$3 AND u.kind=$4 WHERE a.department_id=$1 AND COALESCE(u.include_in_document, true)=true ORDER BY a.sort_order,a.created_at")
-   .bind(dept_id).bind(p.year).bind(p.month).bind(&p.kind).fetch_all(&s.db).await.map_err(db)?;
-  if rows.is_empty() {
-   return Err(bad(format!("Odjel {} nema nijednu stavku uključenu u dokument. Dodajte aktivnost ili provjerite oznaku 'U dokument'.",d.get::<String,_>("name"))));
-  }
-  let items:Vec<Value>=rows.iter().map(|r|json!({"id":r.get::<Uuid,_>("id"),"parent_id":r.get::<Option<Uuid>,_>("parent_id"),"title":r.get::<String,_>("title"),"description":r.get::<String,_>("description"),"type":r.get::<String,_>("type"),"content":r.get::<String,_>("content"),"progress":r.get::<String,_>("progress")})).collect();
-  let source_version:Option<i32>=sqlx::query_scalar("SELECT MAX(v.version) FROM department_document_versions v JOIN department_documents dd ON dd.id=v.department_document_id WHERE dd.department_id=$1 AND dd.year=$2 AND dd.month=$3 AND dd.kind=$4")
-   .bind(dept_id).bind(p.year).bind(p.month).bind(&p.kind).fetch_one(&s.db).await.map_err(db)?;
+  // A director must consume the submitted immutable snapshot, NOT live activities.
+  // This prevents subsequent edits from silently changing an accepted report.
+  let version_row=sqlx::query("SELECT v.version,v.snapshot FROM department_document_versions v JOIN department_documents dd ON dd.id=v.department_document_id WHERE dd.department_id=$1 AND dd.year=$2 AND dd.month=$3 AND dd.kind=$4 ORDER BY v.version DESC LIMIT 1")
+   .bind(dept_id).bind(p.year).bind(p.month).bind(&p.kind).fetch_optional(&s.db).await.map_err(db)?.ok_or_else(||bad("Odjel nema spremljenu predanu verziju"))?;
+  let source_version:i32=version_row.get("version");
+  let immutable:Value=version_row.get("snapshot");
+  let items=immutable.get("items").and_then(Value::as_array).ok_or_else(||bad("Predana verzija nema popis aktivnosti"))?;
+  if items.is_empty(){return Err(bad("Predana verzija odjela nema aktivnosti"));}
   sections.push(json!({"department_id":dept_id,"code":d.get::<String,_>("code"),"name":d.get::<String,_>("name"),"source_version":source_version,"items":items}));
  }
  let title=format!("{} značajnijih aktivnosti za {:02}.{}.",if p.kind=="plan" {"PLAN"}else{"IZVJEŠĆE"},p.month,p.year);
