@@ -433,3 +433,38 @@ header h1{font-size:23px;font-weight:750;letter-spacing:-.45px}
  .simple-home-table>button span:nth-child(2),.simple-home-table>button span:nth-child(3){display:none}
  .simple-home-head{flex-wrap:wrap}
 }
+
+
+/* Registry controls: visibly actionable, minimally styled, higher contrast */
+:root{--rf-orange:#d85e08;--rf-orange-deep:#a94303;--rf-text:#241f1a;--rf-muted:#5d544b;--rf-input:#c4b5a4}
+.main, .panel, .simple-home{color:var(--rf-text)}
+.main>header h1,.ux-intro h2,.monthly-card-heading strong,.ux-registry-name strong{color:#201b17}
+.ux-intro p,.simple-guidance,.panel p{color:#62574b}
+.registry-create-trigger{flex-shrink:0;min-height:40px;padding:10px 16px;font-weight:750}
+.registry-create-form{border:1px solid #e4b36f;background:#fff8ec;border-radius:9px;padding:20px;margin:0 0 20px;box-shadow:0 3px 14px #65310612}
+.registry-create-form h3{margin:0 0 2px;color:#36271b;font-size:16px}
+.registry-create-actions{display:flex;align-items:center;flex-wrap:wrap;gap:10px}
+.registry-create-form .form-grid button,.registry-create-actions button{justify-self:auto}
+input,textarea,select{border-color:var(--rf-input);color:#29231c;background:#fffefa}
+input:focus,textarea:focus,select:focus{border-color:#dd670d;box-shadow:0 0 0 3px #f5b55652}
+.primary{background:#d85e08;border-color:#d85e08;color:#fff}
+.primary:hover{background:#a94303;border-color:#a94303}
+.outline{color:#443326;border-color:#c7b9a8;background:#fffefa}
+.outline:hover{background:#fff0d8;border-color:#c26b1f}
+.sidebar nav button{color:#eee4d8}
+.sidebar nav button.active{background:#f4c44e;color:#231d17;font-weight:800}
+.ux-registry-item{border-bottom:1px solid #d6c8b8}
+.ux-registry-actions .outline{color:#754014}
+.ux-registry-actions .outline:hover{border-color:#cf8a48;background:#fff1df}
+.ux-toolbar{border-color:#d9cfc2}
+.monthly-card{border-bottom:1px solid #dacdbd}
+.monthly-card.is-open{background:#fffaf3}
+.monthly-expand svg{color:#a74908}
+.monthly-card-flags .monthly-state{color:#695d51}
+.ux-kind-switch button.active{border-bottom-color:#d85e08;color:#241e18}
+button:focus-visible,summary:focus-visible{outline:3px solid #e58d1a;outline-offset:3px}
+@media(max-width:650px){
+ .registry-create-trigger{width:100%;justify-content:center}
+ .registry-create-form{padding:14px}
+ .registry-create-actions button{flex:1}
+}
