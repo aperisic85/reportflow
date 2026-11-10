@@ -96,3 +96,15 @@ CREATE TABLE sector_document_edits (
  edited_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 CREATE INDEX sector_document_edits_idx ON sector_document_edits(sector_document_id,edited_at DESC);
+
+-- Durable per-user notifications for invitations and messages.
+CREATE TABLE user_notifications (
+ id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+ user_id UUID NOT NULL REFERENCES users(id),
+ thread_id UUID NOT NULL REFERENCES activity_threads(id) ON DELETE CASCADE,
+ kind TEXT NOT NULL CHECK(kind IN ('invited','message','status_changed')),
+ created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+ read_at TIMESTAMPTZ
+);
+CREATE INDEX user_notifications_unread_idx ON user_notifications(user_id,created_at DESC) WHERE read_at IS NULL;
+CREATE INDEX user_notifications_thread_idx ON user_notifications(user_id,thread_id,created_at DESC);
