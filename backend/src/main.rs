@@ -385,13 +385,12 @@ async fn inbox(State(s):State<App>,h:HeaderMap)->ResultApi<Json<Value>> {
  let rows=sqlx::query(r#"
  SELECT t.id,t.title,t.status,t.updated_at,a.id AS activity_id,a.title AS activity_title,
  d.name AS department_name,a.department_id,
- (SELECT COUNT(*) FROM activity_thread_messages m WHERE m.thread_id=t.id
-   AND m.created_at>p.last_read_at AND m.author_id<>$1) AS unread,
+ (SELECT COUNT(*) FROM user_notifications n WHERE n.thread_id=t.id AND n.user_id=$1 AND n.read_at IS NULL) AS unread,
  (SELECT MAX(m.created_at) FROM activity_thread_messages m WHERE m.thread_id=t.id) AS last_message_at
  FROM activity_thread_participants p
  JOIN activity_threads t ON t.id=p.thread_id
  JOIN activities a ON a.id=t.activity_id JOIN departments d ON d.id=a.department_id
- WHERE p.user_id=$1 AND (SELECT COUNT(*) FROM activity_thread_messages m WHERE m.thread_id=t.id)>0
+ WHERE p.user_id=$1
  ORDER BY t.updated_at DESC LIMIT 150
  "#).bind(c.sub).fetch_all(&s.db).await.map_err(db)?;
  Ok(Json(Value::Array(rows.iter().map(|r|json!({
@@ -408,6 +407,8 @@ async fn mark_thread_read(State(s):State<App>,h:HeaderMap,Path(id):Path<Uuid>)->
   .bind(id).bind(c.sub).fetch_one(&s.db).await.map_err(db)?;
  if !member{return Err(forbidden());}
  sqlx::query("UPDATE activity_thread_participants SET last_read_at=now() WHERE thread_id=$1 AND user_id=$2")
+  .bind(id).bind(c.sub).execute(&s.db).await.map_err(db)?;
+ sqlx::query("UPDATE user_notifications SET read_at=now() WHERE thread_id=$1 AND user_id=$2 AND read_at IS NULL")
   .bind(id).bind(c.sub).execute(&s.db).await.map_err(db)?;
  Ok(Json(json!({"ok":true})))
 }
@@ -455,6 +456,10 @@ async fn thread_create(State(s):State<App>,h:HeaderMap,Path(activity_id):Path<Uu
  for person in participants {
   sqlx::query("INSERT INTO activity_thread_participants(thread_id,user_id,added_by) VALUES($1,$2,$3)")
    .bind(id).bind(person).bind(c.sub).execute(&mut *tx).await.map_err(db)?;
+  if person!=c.sub {
+   sqlx::query("INSERT INTO user_notifications(user_id,thread_id,kind) VALUES($1,$2,'invited')")
+    .bind(person).bind(id).execute(&mut *tx).await.map_err(db)?;
+  }
  }
  if let Some(message)=p.message.filter(|m|!m.trim().is_empty()){
   sqlx::query("INSERT INTO activity_thread_messages(thread_id,author_id,body) VALUES($1,$2,$3)")
@@ -485,6 +490,8 @@ async fn thread_send(State(s):State<App>,h:HeaderMap,Path(id):Path<Uuid>,Json(p)
  if status=="done"{return Err(bad("Završeni razgovor prvo ponovno otvori"));}
  let message_id:Uuid=sqlx::query_scalar("INSERT INTO activity_thread_messages(thread_id,author_id,body) VALUES($1,$2,$3) RETURNING id").bind(id).bind(c.sub).bind(p.body.trim()).fetch_one(&s.db).await.map_err(db)?;
  sqlx::query("UPDATE activity_threads SET updated_at=now() WHERE id=$1").bind(id).execute(&s.db).await.map_err(db)?;
+ sqlx::query("INSERT INTO user_notifications(user_id,thread_id,kind) SELECT user_id,$1,'message' FROM activity_thread_participants WHERE thread_id=$1 AND user_id<>$2")
+  .bind(id).bind(c.sub).execute(&s.db).await.map_err(db)?;
  audit(&s,&c,"thread.message",Some(id)).await;
  Ok(Json(json!({"id":message_id})))
 }
@@ -501,6 +508,8 @@ async fn thread_add_person(State(s):State<App>,h:HeaderMap,Path(id):Path<Uuid>,J
   sqlx::query("INSERT INTO activity_thread_events(thread_id,actor_id,event_type,payload) VALUES($1,$2,'participant_added',$3)")
    .bind(id).bind(c.sub).bind(json!({"user_id":p.user_id})).execute(&mut *tx).await.map_err(db)?;
   sqlx::query("UPDATE activity_threads SET updated_at=now() WHERE id=$1").bind(id).execute(&mut *tx).await.map_err(db)?;
+  sqlx::query("INSERT INTO user_notifications(user_id,thread_id,kind) VALUES($1,$2,'invited')")
+   .bind(p.user_id).bind(id).execute(&mut *tx).await.map_err(db)?;
  }
  tx.commit().await.map_err(db)?;Ok(Json(json!({"ok":true})))
 }
