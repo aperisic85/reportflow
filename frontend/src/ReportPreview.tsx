@@ -1,0 +1,37 @@
+import type {SectorDoc,SectorSnapshot} from './api';
+type DepartmentVersion={id:string;version:number;snapshot:{items:Array<{id:string;title:string;description:string;content:string;progress:string;parent_id:string|null}>;kind:string;year:number;month:number};author:string;submitted_at:string};
+export type {DepartmentVersion};
+const stamp=(v:string)=>new Date(v).toLocaleString('hr-HR',{dateStyle:'medium',timeStyle:'short'});
+const progressLabels:Record<string,string>={in_progress:'U tijeku',completed:'Završeno',postponed:'Odgođeno',not_started:'Nije započeto'};
+function Items({items}:{items:Array<{id:string;title:string;description?:string;content?:string;progress?:string}>}){
+ return <div className="report-items">{items.map((item,index)=><article key={item.id} className="report-item">
+  <h4>{index+1}. {item.title}</h4>
+  {item.description?.trim()&&<p>{item.description}</p>}
+  {item.content?.trim()&&<p className="report-actual">{item.content}</p>}
+  {item.progress&&<small>{progressLabels[item.progress]??item.progress}</small>}
+ </article>)}</div>;
+}
+export function SectorReportPreview({doc,onClose}:{doc:SectorDoc;onClose:()=>void}){
+ const snap=doc.snapshot as SectorSnapshot;
+ return <section className="report-reader panel">
+  <div className="collab-top"><div><span className="report-label">Digitalni pregled</span><h2>{doc.title}</h2>
+   <p>Revizija {doc.revision} · {doc.status==='locked'?'Zaključano':'Nacrt'} · kreirano {stamp(doc.created_at)}</p></div>
+   <button className="outline" type="button" onClick={onClose}>Zatvori</button></div>
+  {doc.introduction.trim()&&<div className="report-intro"><h3>Uvod</h3><p>{doc.introduction}</p></div>}
+  {snap.sections.map((sec,index)=><section className="report-section" key={sec.department_id}>
+   <h3>{index+1}. {sec.name}</h3><Items items={sec.items}/>
+  </section>)}
+  {doc.conclusion.trim()&&<div className="report-intro"><h3>Zaključak</h3><p>{doc.conclusion}</p></div>}
+  <p className="report-footnote">Ovaj pregled prikazuje sadržaj spremljene revizije. Word/PDF izvoz ostaje zaseban službeni obrazac.</p>
+ </section>;
+}
+export function DepartmentReportPreview({version,onClose}:{version:DepartmentVersion;onClose:()=>void}){
+ const s=version.snapshot;
+ return <section className="report-reader panel">
+  <div className="collab-top"><div><span className="report-label">Digitalni pregled predane verzije</span>
+   <h2>{s.kind==='plan'?'Mjesečni plan':'Mjesečno izvješće'} · {String(s.month).padStart(2,'0')}/{s.year}</h2>
+   <p>Verzija {version.version} · {version.author} · {stamp(version.submitted_at)}</p></div>
+   <button className="outline" type="button" onClick={onClose}>Zatvori</button></div>
+  <Items items={s.items}/>
+ </section>;
+}
