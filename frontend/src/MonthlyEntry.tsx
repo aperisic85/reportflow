@@ -8,12 +8,11 @@ type Props={
  onSave:(content:string,progress:string,include:boolean)=>void;
 };
 const labels:Record<string,string>={in_progress:'U tijeku',completed:'Završeno',postponed:'Odgođeno',not_started:'Nije započeto'};
-const typeName:Record<string,string>={ongoing:'Trajna aktivnost',project:'Projekt',one_off:'Jednokratna'};
 export default function MonthlyEntry({item,initial,planReference,kind,disabled,busy,onSave}:Props){
  const [content,setContent]=useState(initial?.content??'');
  const [progress,setProgress]=useState(initial?.progress??(kind==='plan'?'not_started':'in_progress'));
  const [include,setInclude]=useState(initial?.include_in_document??true);
- const [expanded,setExpanded]=useState(Boolean(initial?.content));
+ const [expanded,setExpanded]=useState(false);
  useEffect(()=>{
   setContent(initial?.content??'');
   setProgress(initial?.progress??(kind==='plan'?'not_started':'in_progress'));
@@ -32,22 +31,20 @@ export default function MonthlyEntry({item,initial,planReference,kind,disabled,b
   <div className="monthly-card-top">
    <button className="monthly-expand" type="button" onClick={()=>setExpanded(p=>!p)} aria-expanded={expanded}>
     {expanded?<ChevronDown size={18}/>:<ChevronRight size={18}/>}
-    <span className="monthly-card-heading"><strong>{item.title}</strong><small>{typeName[item.type]??item.type}</small></span>
+    <span className="monthly-card-heading"><strong>{item.title}</strong></span>
    </button>
-   <div className="monthly-card-flags">{changed&&<span className="monthly-unsaved">Nespremljene izmjene</span>}
-    <span className={'chip '+(saved?'green':'')}>{saved?'Spremljeno':'Nije uneseno'}</span>
-   </div>
+   <div className="monthly-card-flags"><span className={changed?'monthly-unsaved':'monthly-state'}>{changed?'Nije spremljeno':saved?'Spremljeno':'Bez unosa'}</span></div>
   </div>
   {expanded&&<div className="monthly-card-body">
-   {item.description.trim()&&<div className="monthly-reference"><span>Opis aktivnosti iz registra</span><p>{item.description}</p></div>}
-   {kind==='report'&&<div className="monthly-plan-ref"><strong>Plan za ovaj mjesec</strong>
-    <p>{planReference?.trim()||'Nema prethodno unesenog plana za ovu aktivnost. Izvješće se može unijeti i bez plana.'}</p>
-   </div>}
+   {item.description.trim()&&<details className="monthly-context"><summary>Opis aktivnosti</summary><p>{item.description}</p></details>}
+   {kind==='report'&&<details className="monthly-context"><summary>Plan za ovaj mjesec</summary>
+    <p>{planReference?.trim()||'Nema unesenog plana za ovu aktivnost.'}</p>
+   </details>}
    <label className="monthly-field" htmlFor={'entry-'+item.id}>
     <strong>{kind==='plan'?'Što planiramo napraviti?':'Što je stvarno realizirano?'}</strong>
-    <span>{description}</span>
+    <span className="screen-reader-only">{description}</span>
    </label>
-   <textarea id={'entry-'+item.id} disabled={disabled} rows={4} value={content} onChange={e=>setContent(e.target.value)} placeholder={placeholder}/>
+   <textarea id={'entry-'+item.id} disabled={disabled} rows={5} value={content} onChange={e=>setContent(e.target.value)} placeholder={placeholder}/>
    <div className="monthly-controls">
     {kind==='report'&&<label className="monthly-progress">Status realizacije
      <select value={progress} disabled={disabled} onChange={e=>setProgress(e.target.value)}>
@@ -55,7 +52,7 @@ export default function MonthlyEntry({item,initial,planReference,kind,disabled,b
      </select>
     </label>}
     <label className="monthly-include"><input type="checkbox" disabled={disabled} checked={include} onChange={e=>setInclude(e.target.checked)}/>
-     Uključi ovu aktivnost u {kind==='plan'?'mjesečni plan':'mjesečno izvješće'}
+     U dokument
     </label>
     <button type="button" className="primary monthly-save" disabled={disabled||busy||!changed} onClick={()=>onSave(content,progress,include)}>
      {changed?<Save size={16}/>:<Check size={16}/>} {saved?'Spremi promjene':'Spremi unos'}
