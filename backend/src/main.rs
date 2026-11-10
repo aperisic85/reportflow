@@ -384,7 +384,7 @@ async fn inbox(State(s):State<App>,h:HeaderMap)->ResultApi<Json<Value>> {
  let c=who(&s,&h)?;
  let rows=sqlx::query(r#"
  SELECT t.id,t.title,t.status,t.updated_at,a.id AS activity_id,a.title AS activity_title,
- d.name AS department_name,
+ d.name AS department_name,a.department_id,
  (SELECT COUNT(*) FROM activity_thread_messages m WHERE m.thread_id=t.id
    AND m.created_at>p.last_read_at AND m.author_id<>$1) AS unread,
  (SELECT MAX(m.created_at) FROM activity_thread_messages m WHERE m.thread_id=t.id) AS last_message_at
@@ -397,7 +397,7 @@ async fn inbox(State(s):State<App>,h:HeaderMap)->ResultApi<Json<Value>> {
  Ok(Json(Value::Array(rows.iter().map(|r|json!({
   "id":r.get::<Uuid,_>("id"),"title":r.get::<String,_>("title"),"status":r.get::<String,_>("status"),
   "activity_id":r.get::<Uuid,_>("activity_id"),"activity_title":r.get::<String,_>("activity_title"),
-  "department_name":r.get::<String,_>("department_name"),"unread":r.get::<i64,_>("unread"),
+  "department_name":r.get::<String,_>("department_name"),"department_id":r.get::<Uuid,_>("department_id"),"unread":r.get::<i64,_>("unread"),
   "updated_at":r.get::<chrono::DateTime<Utc>,_>("updated_at"),
   "last_message_at":r.get::<Option<chrono::DateTime<Utc>>,_>("last_message_at")
  })).collect())))
