@@ -597,9 +597,13 @@ async fn edit_sector(State(s):State<App>,h:HeaderMap,Path(id):Path<Uuid>,Json(p)
  if seen_items.is_empty() {return Err(bad("Sektorski dokument mora sadržavati barem jednu stavku"));}
  if new_sections.iter().all(|s| s.get("items").and_then(Value::as_array).map(|a|a.is_empty()).unwrap_or(true)) {return Err(bad("Završni dokument mora sadržavati barem jednu stavku"));}
  let mut snapshot=old; snapshot["sections"]=json!(new_sections);
+ let mut tx=s.db.begin().await.map_err(db)?;
  let n=sqlx::query("UPDATE sector_documents SET snapshot=$2,introduction=$3,conclusion=$4 WHERE id=$1 AND status='draft'")
-  .bind(id).bind(snapshot).bind(p.introduction).bind(p.conclusion).execute(&s.db).await.map_err(db)?.rows_affected();
+  .bind(id).bind(&snapshot).bind(&p.introduction).bind(&p.conclusion).execute(&mut *tx).await.map_err(db)?.rows_affected();
  if n==0 {return Err(bad("Dokument je u međuvremenu zaključan"));}
+ sqlx::query("INSERT INTO sector_document_edits(sector_document_id,snapshot,introduction,conclusion,edited_by) VALUES($1,$2,$3,$4,$5)")
+  .bind(id).bind(snapshot).bind(&p.introduction).bind(&p.conclusion).bind(c.sub).execute(&mut *tx).await.map_err(db)?;
+ tx.commit().await.map_err(db)?;
  audit(&s,&c,"sector.edit",Some(id)).await;Ok(Json(json!({"ok":true})))
 }
 
