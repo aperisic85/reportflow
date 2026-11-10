@@ -379,6 +379,39 @@ async fn department_versions(State(s):State<App>,h:HeaderMap,Query(p):Query<Vers
 // Collaboration is scoped to the activity's department. Only thread members
 // and department managers/directors can read messages; all message writes
 // are timestamped, append-only.
+
+async fn inbox(State(s):State<App>,h:HeaderMap)->ResultApi<Json<Value>> {
+ let c=who(&s,&h)?;
+ let rows=sqlx::query(r#"
+ SELECT t.id,t.title,t.status,t.updated_at,a.id AS activity_id,a.title AS activity_title,
+ d.name AS department_name,
+ (SELECT COUNT(*) FROM activity_thread_messages m WHERE m.thread_id=t.id
+   AND m.created_at>p.last_read_at AND m.author_id<>$1) AS unread,
+ (SELECT MAX(m.created_at) FROM activity_thread_messages m WHERE m.thread_id=t.id) AS last_message_at
+ FROM activity_thread_participants p
+ JOIN activity_threads t ON t.id=p.thread_id
+ JOIN activities a ON a.id=t.activity_id JOIN departments d ON d.id=a.department_id
+ WHERE p.user_id=$1 AND (SELECT COUNT(*) FROM activity_thread_messages m WHERE m.thread_id=t.id)>0
+ ORDER BY t.updated_at DESC LIMIT 150
+ "#).bind(c.sub).fetch_all(&s.db).await.map_err(db)?;
+ Ok(Json(Value::Array(rows.iter().map(|r|json!({
+  "id":r.get::<Uuid,_>("id"),"title":r.get::<String,_>("title"),"status":r.get::<String,_>("status"),
+  "activity_id":r.get::<Uuid,_>("activity_id"),"activity_title":r.get::<String,_>("activity_title"),
+  "department_name":r.get::<String,_>("department_name"),"unread":r.get::<i64,_>("unread"),
+  "updated_at":r.get::<chrono::DateTime<Utc>,_>("updated_at"),
+  "last_message_at":r.get::<Option<chrono::DateTime<Utc>>,_>("last_message_at")
+ })).collect())))
+}
+async fn mark_thread_read(State(s):State<App>,h:HeaderMap,Path(id):Path<Uuid>)->ResultApi<Json<Value>> {
+ let c=who(&s,&h)?;
+ let member:bool=sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM activity_thread_participants WHERE thread_id=$1 AND user_id=$2)")
+  .bind(id).bind(c.sub).fetch_one(&s.db).await.map_err(db)?;
+ if !member{return Err(forbidden());}
+ sqlx::query("UPDATE activity_thread_participants SET last_read_at=now() WHERE thread_id=$1 AND user_id=$2")
+  .bind(id).bind(c.sub).execute(&s.db).await.map_err(db)?;
+ Ok(Json(json!({"ok":true})))
+}
+
 async fn activity_people(State(s):State<App>,h:HeaderMap,Path(id):Path<Uuid>)->ResultApi<Json<Value>> {
  let c=who(&s,&h)?;
  let dept:Uuid=sqlx::query_scalar("SELECT department_id FROM activities WHERE id=$1").bind(id).fetch_optional(&s.db).await.map_err(db)?.ok_or_else(||bad("Aktivnost ne postoji"))?;
@@ -613,6 +646,8 @@ async fn health()->Json<Value> {Json(json!({"status":"ok"}))}
   .route("/api/activities/{id}/people",get(activity_people))
   .route("/api/activities/{id}/threads",get(threads_list).post(thread_create))
   .route("/api/threads/{id}",get(thread_detail))
+  .route("/api/inbox",get(inbox))
+  .route("/api/threads/{id}/read",post(mark_thread_read))
   .route("/api/threads/{id}/messages",post(thread_send))
   .route("/api/threads/{id}/participants",post(thread_add_person))
   .route("/api/threads/{id}/status",patch(thread_status))
