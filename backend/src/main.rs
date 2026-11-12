@@ -823,14 +823,14 @@ async fn lock_sector(State(s):State<App>,h:HeaderMap,Path(id):Path<Uuid>)->Resul
 }
 async fn export_doc(State(s):State<App>,h:HeaderMap,Path((id,format)):Path<(Uuid,String)>)->ResultApi<Response> {
  let c=who(&s,&h).await?; if !director(&c) {return Err(forbidden());}
- if !["docx","pdf","modern-pdf"].contains(&format.as_str()) {return Err(bad("Nepodržani format"));}
+ if !["docx","pdf","modern-pdf","modern-letterhead-pdf"].contains(&format.as_str()) {return Err(bad("Nepodržani format"));}
  let r=sqlx::query("SELECT title,introduction,conclusion,snapshot,revision FROM sector_documents WHERE id=$1 AND sector_id=$2").bind(id).bind(c.sector_id.ok_or_else(forbidden)?).fetch_optional(&s.db).await.map_err(db)?.ok_or_else(||bad("Nepostojeći dokument"))?;
  let payload=json!({"title":r.get::<String,_>("title"),"introduction":r.get::<String,_>("introduction"),"conclusion":r.get::<String,_>("conclusion"),"snapshot":r.get::<Value,_>("snapshot")});
  let resp=s.client.post(format!("{}/render/{}",s.doc_url,format)).json(&payload).send().await.map_err(|e|ErrApi(StatusCode::BAD_GATEWAY,e.to_string()))?;
  if !resp.status().is_success() {return Err(ErrApi(StatusCode::BAD_GATEWAY,resp.text().await.unwrap_or_default()));}
  let bytes=resp.bytes().await.map_err(|e|ErrApi(StatusCode::BAD_GATEWAY,e.to_string()))?;
- let mime=if format=="pdf"||format=="modern-pdf" {"application/pdf"} else {"application/vnd.openxmlformats-officedocument.wordprocessingml.document"};
- Ok(Response::builder().status(StatusCode::OK).header(header::CONTENT_TYPE,mime).header(header::CONTENT_DISPOSITION,format!("attachment; filename=reportflow-{}{}.{}",id,if format=="modern-pdf" {"-modern"}else{""},if format=="docx" {"docx"}else{"pdf"})).body(Body::from(bytes)).unwrap())
+ let mime=if format=="pdf"||format=="modern-pdf"||format=="modern-letterhead-pdf" {"application/pdf"} else {"application/vnd.openxmlformats-officedocument.wordprocessingml.document"};
+ Ok(Response::builder().status(StatusCode::OK).header(header::CONTENT_TYPE,mime).header(header::CONTENT_DISPOSITION,format!("attachment; filename=reportflow-{}{}.{}",id,if format=="modern-pdf" {"-modern"}else if format=="modern-letterhead-pdf" {"-modern-memorandum"}else{""},if format=="docx" {"docx"}else{"pdf"})).body(Body::from(bytes)).unwrap())
 }
 async fn health()->Json<Value> {Json(json!({"status":"ok"}))}
 #[tokio::main] async fn main()->anyhow::Result<()> {

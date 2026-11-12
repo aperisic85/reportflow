@@ -79,9 +79,10 @@ def health():
 
 @app.post('/render/{format}')
 def render(format: str, payload: RenderRequest):
-    if format not in ('docx', 'pdf', 'modern-pdf'):
+    if format not in ('docx', 'pdf', 'modern-pdf', 'modern-letterhead-pdf'):
         raise HTTPException(400, 'Unsupported format')
-    content = populate_modern(payload) if format == 'modern-pdf' else populate(payload)
+    content = (populate_modern(payload, memorandum=(format == 'modern-letterhead-pdf'))
+               if format in ('modern-pdf', 'modern-letterhead-pdf') else populate(payload))
     if format == 'docx':
         return Response(content=content, media_type='application/vnd.openxmlformats-officedocument.wordprocessingml.document')
     with tempfile.TemporaryDirectory() as tmp:

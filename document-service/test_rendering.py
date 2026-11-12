@@ -1,6 +1,9 @@
 """Document-renderer tests that do not require building the Rust backend."""
 import io
 import unittest
+import tempfile
+from pathlib import Path
+from unittest.mock import patch
 
 from docx import Document
 from app import RenderRequest, populate
@@ -43,6 +46,31 @@ class NumberingTests(unittest.TestCase):
         ]
         result = numbered_items(rows)
         self.assertEqual({item["id"] for item, _, _ in result}, {"one", "two", "three"})
+
+    def test_memo_export_retains_iso_header_and_footer(self):
+        # Build a representative ISO template without sharing any company assets.
+        with tempfile.TemporaryDirectory() as directory:
+            template = Path(directory) / "iso-memorandum.docx"
+            original = Document()
+            original.add_paragraph("PLACEHOLDER BODY SHOULD BE REPLACED")
+            original.sections[0].header.paragraphs[0].text = "ISO MEMORANDUM - ZAGLAVLJE"
+            original.sections[0].footer.paragraphs[0].text = "ISO MEMORANDUM - PODNOZJE"
+            original.save(template)
+            with patch("modern.TEMPLATE", template):
+                output = populate_modern(fixture(), memorandum=True)
+        result = Document(io.BytesIO(output))
+        self.assertIn("ISO MEMORANDUM - ZAGLAVLJE", result.sections[0].header.paragraphs[0].text)
+        self.assertIn("ISO MEMORANDUM - PODNOZJE", result.sections[0].footer.paragraphs[0].text)
+        body = "\\n".join(p.text for p in result.paragraphs)
+        self.assertNotIn("PLACEHOLDER BODY SHOULD BE REPLACED", body)
+        self.assertIn("3.1", body)
+        self.assertIn("Mjesečna realizacija:", body)
+
+    def test_missing_iso_template_is_reported(self):
+        with tempfile.TemporaryDirectory() as directory:
+            with patch("modern.TEMPLATE", Path(directory) / "nonexistent.docx"):
+                with self.assertRaises(FileNotFoundError):
+                    populate_modern(fixture(), memorandum=True)
 
     def test_both_export_styles_preserve_subactivity_number(self):
         data = fixture()
