@@ -147,7 +147,7 @@ function App(){
     {kind==='plan'&&<CarryPlanner departmentId={dept} year={year} month={month} canCarry={canSubmit&&docStatus!=='submitted'} onApplied={refresh}/>}
     {activities.length===0?<Empty text="Nema aktivnosti. Prvo dodaj aktivnost u Unosu aktivnosti."/>:
      visibleEntries.length===0?<Empty text="Nema aktivnosti koje odgovaraju filtrima."/>:
-     <div className="ux-entry-list">{numberedActivities(visibleEntries).map(({item:a,number,depth})=><div className={'activity-hierarchy-row'+(depth?' is-child':'')} key={a.id} style={{marginLeft:Math.min(depth,5)*20}}}><MonthlyEntry
+     <div className="ux-entry-list">{numberedActivities(visibleEntries).map(({item:a,number,depth})=><div className={'activity-hierarchy-row'+(depth?' is-child':'')} key={a.id} style={{marginLeft:Math.min(depth,5)*20}}><MonthlyEntry
       key={`${a.id}-${year}-${month}-${kind}`}
       item={a} kind={kind as 'plan'|'report'}
       planReference={kind==='report'?planRefs.find(r=>r.activity_id===a.id)?.planned:undefined}
