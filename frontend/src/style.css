@@ -587,3 +587,23 @@ button:focus-visible,summary:focus-visible{outline:3px solid #e58d1a;outline-off
 .org-actions{display:flex;gap:10px}
 .org-notice{font-size:13px;color:#356443}
 @media(max-width:760px){.org-shell{flex-direction:column}.org-sidebar{width:auto;padding:16px;gap:15px}.org-sidebar nav{display:flex;flex-wrap:wrap}.org-logout{margin:0}.org-main{padding:20px 12px}.org-form,.org-edit{grid-template-columns:1fr}.org-list>div{align-items:flex-start;flex-direction:column}.org-heading{align-items:start;flex-direction:column}}
+
+
+/* Clear chronological workflow and discrete Inbox */
+.rf-workflow-nav button{line-height:1.4;text-align:left;align-items:flex-start;white-space:normal}
+.rf-workflow-nav button svg{flex-shrink:0;margin-top:1px}
+.rf-inbox-area{margin:23px 6px 17px;padding-top:14px;border-top:1px solid #51483e}
+.rf-inbox-button{display:flex;align-items:center;width:100%;gap:10px;padding:10px 11px;position:relative;cursor:pointer;text-align:left;border:1px solid #51483e;background:#332d27;color:#ffefd8;border-radius:8px;font-size:13px;font-weight:650}
+.rf-inbox-button:hover{background:#453a30;border-color:#d49a34}
+.rf-inbox-button.active{background:#f4c44e;color:#241e17;border-color:#f4c44e}
+.rf-inbox-button>span:nth-child(2){flex:1}
+.rf-inbox-button .inbox-badge{margin-left:0}
+.rf-activity-department{max-width:430px}
+.rf-document-audit{font-size:12px;color:#554a3d;border-top:1px solid #e4dcd0;margin-top:16px;padding-top:8px}
+.rf-document-audit p{margin:7px 0;line-height:1.5}
+.rf-source-version{display:block;font-size:11px;color:#af540c;padding-top:3px}
+.rf-source-summary{display:flex;flex-wrap:wrap;gap:5px 16px;margin-top:9px;font-size:12px;color:#67584a}
+.rf-source-summary span{display:block}
+.rf-entry-created{font-size:11px!important;color:#746353;line-height:1.5;margin:4px 0!important}
+.rf-preview-source{font-size:12px;color:#9a4a0b;margin:-3px 0 16px}
+@media(max-width:900px){.rf-inbox-area{margin:6px 0 0;padding-top:8px}.rf-inbox-button{width:auto}}
