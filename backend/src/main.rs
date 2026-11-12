@@ -906,7 +906,8 @@ async fn archived_pdf(State(s):State<App>,h:HeaderMap,Path(id):Path<Uuid>)->Resu
 async fn export_doc(State(s):State<App>,h:HeaderMap,Path((id,format)):Path<(Uuid,String)>)->ResultApi<Response> {
  let c=who(&s,&h).await?; if !director(&c) {return Err(forbidden());}
  if !["docx","pdf","modern-pdf","modern-letterhead-pdf"].contains(&format.as_str()) {return Err(bad("Nepodržani format"));}
- let r=sqlx::query("SELECT title,introduction,conclusion,snapshot,revision FROM sector_documents WHERE id=$1 AND sector_id=$2").bind(id).bind(c.sector_id.ok_or_else(forbidden)?).fetch_optional(&s.db).await.map_err(db)?.ok_or_else(||bad("Nepostojeći dokument"))?;
+ let r=sqlx::query("SELECT title,introduction,conclusion,snapshot,revision,status FROM sector_documents WHERE id=$1 AND sector_id=$2").bind(id).bind(c.sector_id.ok_or_else(forbidden)?).fetch_optional(&s.db).await.map_err(db)?.ok_or_else(||bad("Nepostojeći dokument"))?;
+ if r.get::<String,_>("status")=="approved" {return Err(bad("Ova revizija je odobrena; preuzmite izvorni arhivirani PDF."));}
  let payload=json!({"title":r.get::<String,_>("title"),"introduction":r.get::<String,_>("introduction"),"conclusion":r.get::<String,_>("conclusion"),"snapshot":r.get::<Value,_>("snapshot")});
  let resp=s.client.post(format!("{}/render/{}",s.doc_url,format)).json(&payload).send().await.map_err(|e|ErrApi(StatusCode::BAD_GATEWAY,e.to_string()))?;
  if !resp.status().is_success() {return Err(ErrApi(StatusCode::BAD_GATEWAY,resp.text().await.unwrap_or_default()));}
