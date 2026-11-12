@@ -5,6 +5,7 @@ the existing LibreOffice renderer. The ISO DOCX/PDF template is not touched.
 """
 from datetime import datetime, timezone
 from io import BytesIO
+from pathlib import Path
 
 from docx import Document
 from docx.enum.table import WD_CELL_VERTICAL_ALIGNMENT
@@ -22,6 +23,7 @@ GOLD = RGBColor(244, 185, 66)
 PAPER = RGBColor(255, 255, 255)
 BORDER = "E6DFD6"
 SOFT = "FFF5E5"
+TEMPLATE = Path("/app/templates/plovput-clean.docx")
 
 
 def shade(cell, fill):
@@ -66,15 +68,28 @@ def paragraph(doc, text="", *, size=10, color=INK, after=7, bold=False):
     return p
 
 
-def populate_modern(payload):
-    doc = Document()
+def populate_modern(payload, memorandum=False):
+    if memorandum:
+        # Copy the *actual ISO template* into this document and only replace
+        # the main body; section headers/footers, logo and page setup survive.
+        # Never silently produce an unbranded PDF when the template is missing.
+        if not TEMPLATE.is_file():
+            raise FileNotFoundError(f"ISO memorandum template missing: {TEMPLATE}")
+        doc = Document(str(TEMPLATE))
+        body = doc._element.body
+        for element in list(body):
+            if not element.tag.endswith("}sectPr"):
+                body.remove(element)
+    else:
+        doc = Document()
     section = doc.sections[0]
-    section.top_margin = Cm(2.55)
-    section.bottom_margin = Cm(2.1)
-    section.left_margin = Cm(2.5)
-    section.right_margin = Cm(2.5)
-    section.header_distance = Cm(1.1)
-    section.footer_distance = Cm(1.1)
+    if not memorandum:
+        section.top_margin = Cm(2.55)
+        section.bottom_margin = Cm(2.1)
+        section.left_margin = Cm(2.5)
+        section.right_margin = Cm(2.5)
+        section.header_distance = Cm(1.1)
+        section.footer_distance = Cm(1.1)
 
     normal = doc.styles["Normal"]
     normal.font.name = "DejaVu Sans"
@@ -82,18 +97,19 @@ def populate_modern(payload):
     normal.font.color.rgb = INK
     normal.paragraph_format.space_after = Pt(7)
 
-    header = section.header.paragraphs[0]
-    header.alignment = WD_ALIGN_PARAGRAPH.RIGHT
-    write_run(header, "REPORTFLOW", bold=True, color=AMBER, size=8.5)
-    write_run(header, "   /   DIGITALNO IZVJEŠĆE", color=MUTED, size=8.5)
-    line(header, color="E2D9CD", size=6)
+    if not memorandum:
+        header = section.header.paragraphs[0]
+        header.alignment = WD_ALIGN_PARAGRAPH.RIGHT
+        write_run(header, "REPORTFLOW", bold=True, color=AMBER, size=8.5)
+        write_run(header, "   /   DIGITALNO IZVJEŠĆE", color=MUTED, size=8.5)
+        line(header, color="E2D9CD", size=6)
 
-    footer = section.footer.paragraphs[0]
-    footer.alignment = WD_ALIGN_PARAGRAPH.RIGHT
-    line(footer, color="E2D9CD", size=5)
-    write_run(footer, "ReportFlow  •  ", color=MUTED, size=8)
-    write_run(footer, "Stranica ", color=MUTED, size=8)
-    add_field(footer, "PAGE")
+        footer = section.footer.paragraphs[0]
+        footer.alignment = WD_ALIGN_PARAGRAPH.RIGHT
+        line(footer, color="E2D9CD", size=5)
+        write_run(footer, "ReportFlow  •  ", color=MUTED, size=8)
+        write_run(footer, "Stranica ", color=MUTED, size=8)
+        add_field(footer, "PAGE")
 
     kind = (payload.snapshot.get("kind") or "report").lower()
     is_plan = kind == "plan"
