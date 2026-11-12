@@ -631,3 +631,31 @@ button:focus-visible,summary:focus-visible{outline:3px solid #e58d1a;outline-off
  }
  .report-item{margin-left:calc(min(var(--report-depth, 0),5)*12px)}
 }
+
+/* Archived reports and verification: quiet, readable, high-contrast */
+.approval-number{font-size:12px;font-weight:750;color:#8e450c;word-break:break-word}
+.approval-verify-link{text-decoration:none;display:inline-flex;align-items:center}
+.approval-backdrop{position:fixed;inset:0;background:#17120bc7;display:flex;align-items:center;justify-content:center;z-index:999;padding:16px}
+.approval-dialog{width:min(100%,560px);max-height:92vh;overflow:auto;background:#fffdfa;border-radius:11px;box-shadow:0 18px 60px #0004;padding:30px;color:#2a241e}
+.approval-dialog h2{font-size:21px;margin:0 0 14px}
+.approval-dialog p{font-size:14px;line-height:1.6;color:#5f5549}
+.approval-dialog label{display:grid;gap:8px;font-weight:650;margin:18px 0}
+.approval-dialog small{font-size:12px;color:#70665a;display:block;margin-top:16px}
+.verify-page{min-height:100vh;background:#eeeae3;display:flex;justify-content:center;align-items:flex-start;padding:clamp(16px,6vw,65px) 15px}
+.verify-card{width:min(100%,800px);background:#fffefa;border:1px solid #ded4c7;border-radius:10px;padding:clamp(22px,5vw,48px);box-shadow:0 8px 30px #22150c13}
+.verify-brand{font-size:15px;color:#b45a12;letter-spacing:.2px}
+.verify-card header{border-bottom:1px solid #e4d8c7;padding-bottom:20px;margin-bottom:24px}
+.verify-card h1{font-size:26px;color:#2d251e;margin:12px 0 6px}
+.verify-card header p,.verify-disclaimer{color:#78695a;font-size:13px;line-height:1.6}
+.verify-success{border-radius:7px;padding:15px 18px;background:#e4f4e8;color:#235834;font-weight:750;margin:20px 0}
+.verify-details{margin:20px 0}
+.verify-details>div{display:grid;grid-template-columns:165px minmax(0,1fr);padding:12px 0;border-bottom:1px solid #eee6da;gap:15px;font-size:14px}
+.verify-details dt{color:#776959}.verify-details dd{margin:0;font-weight:600;color:#2a231c}
+.verify-hash{font-family:monospace;font-size:12px;overflow-wrap:anywhere}
+.verify-file{background:#fff7e9;border:1px solid #ead0a8;padding:20px;border-radius:8px;margin:26px 0}
+.verify-file h2{font-size:17px;margin:0 0 8px}
+.verify-file p{font-size:13px;color:#63574b;line-height:1.5}
+.verify-file input{width:100%;padding:9px}
+.verify-ok{color:#256039!important;font-weight:750}
+.verify-bad{color:#ad341c!important;font-weight:750}
+@media(max-width:600px){.verify-details>div{grid-template-columns:1fr;gap:4px}.approval-dialog{padding:20px}}
