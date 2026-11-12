@@ -127,8 +127,8 @@ async fn dashboard(State(s):State<App>,h:HeaderMap,Query(p):Query<DashboardFilte
 #[derive(Deserialize)] struct FilterDept {department_id:Uuid}
 async fn activities(State(s):State<App>,h:HeaderMap,Query(p):Query<FilterDept>)->ResultApi<Json<Value>> {
  let c=who(&s,&h)?; if !can_read(&c,p.department_id) {return Err(forbidden());}
- let rows=sqlx::query("SELECT id,department_id,parent_id,title,description,type,status,sort_order,created_by FROM activities WHERE department_id=$1 ORDER BY sort_order,created_at").bind(p.department_id).fetch_all(&s.db).await.map_err(db)?;
- Ok(Json(Value::Array(rows.iter().map(|r|json!({"id":r.get::<Uuid,_>("id"),"department_id":r.get::<Uuid,_>("department_id"),"parent_id":r.get::<Option<Uuid>,_>("parent_id"),"title":r.get::<String,_>("title"),"description":r.get::<String,_>("description"),"type":r.get::<String,_>("type"),"status":r.get::<String,_>("status"),"sort_order":r.get::<i32,_>("sort_order"),"created_by":r.get::<Option<Uuid>,_>("created_by")})).collect())))
+ let rows=sqlx::query("SELECT id,department_id,parent_id,title,description,type,status,sort_order,created_by,created_at,updated_at FROM activities WHERE department_id=$1 ORDER BY sort_order,created_at").bind(p.department_id).fetch_all(&s.db).await.map_err(db)?;
+ Ok(Json(Value::Array(rows.iter().map(|r|json!({"id":r.get::<Uuid,_>("id"),"department_id":r.get::<Uuid,_>("department_id"),"parent_id":r.get::<Option<Uuid>,_>("parent_id"),"title":r.get::<String,_>("title"),"description":r.get::<String,_>("description"),"type":r.get::<String,_>("type"),"status":r.get::<String,_>("status"),"sort_order":r.get::<i32,_>("sort_order"),"created_by":r.get::<Option<Uuid>,_>("created_by"),"created_at":r.get::<chrono::DateTime<Utc>,_>("created_at"),"updated_at":r.get::<chrono::DateTime<Utc>,_>("updated_at")})).collect())))
 }
 #[derive(Deserialize)]
 struct ActivitySearchFilter {
@@ -333,13 +333,202 @@ async fn department_docs(State(s):State<App>,h:HeaderMap,Query(p):Query<PeriodFi
 async fn save_department_doc(State(s):State<App>,h:HeaderMap,Json(p):Json<SubmitDept>)->ResultApi<Json<Value>> {
  let c=who(&s,&h)?; if !can_manage(&c,p.department_id) {return Err(forbidden());} check_period(p.year,p.month,&p.kind)?;
  if !["draft","submitted"].contains(&p.status.as_str()) {return Err(bad("Nevaljan status dokumenta"));}
- if p.status=="submitted" {
-  let count:i64=sqlx::query_scalar("SELECT COUNT(*) FROM activities a LEFT JOIN activity_updates u ON u.activity_id=a.id AND u.year=$2 AND u.month=$3 AND u.kind=$4 WHERE a.department_id=$1 AND COALESCE(u.include_in_document, true)=true")
-   .bind(p.department_id).bind(p.year).bind(p.month).bind(&p.kind).fetch_one(&s.db).await.map_err(db)?;
-  if count==0 {return Err(bad("Nema aktivnosti uključenih u dokument. Dodajte aktivnost ili provjerite oznaku 'U dokument'."));}
+ let mut tx=s.db.begin().await.map_err(db)?;
+ // Protect the version sequence from concurrent submissions.
+ let doc=sqlx::query("INSERT INTO department_documents(department_id,year,month,kind,status,submitted_by,submitted_at) VALUES($1,$2,$3,$4,'draft',NULL,NULL) ON CONFLICT(department_id,year,month,kind) DO UPDATE SET id=department_documents.id RETURNING id")
+  .bind(p.department_id).bind(p.year).bind(p.month).bind(&p.kind).fetch_one(&mut *tx).await.map_err(db)?;
+ let id:Uuid=doc.get("id");
+ let old: String=sqlx::query_scalar("SELECT status FROM department_documents WHERE id=$1 FOR UPDATE").bind(id).fetch_one(&mut *tx).await.map_err(db)?;
+ let mut version:Option<i32>=None;
+ if p.status=="submitted" && old!="submitted" {
+  let rows=sqlx::query("SELECT a.id,a.title,a.description,a.parent_id,a.type,a.status,COALESCE(u.content,'') AS content,COALESCE(u.progress,'in_progress') AS progress FROM activities a LEFT JOIN activity_updates u ON u.activity_id=a.id AND u.year=$2 AND u.month=$3 AND u.kind=$4 WHERE a.department_id=$1 AND COALESCE(u.include_in_document,true)=true ORDER BY a.sort_order,a.created_at")
+   .bind(p.department_id).bind(p.year).bind(p.month).bind(&p.kind).fetch_all(&mut *tx).await.map_err(db)?;
+  if rows.is_empty(){return Err(bad("Nema aktivnosti uključenih u dokument"));}
+  let items:Vec<Value>=rows.iter().map(|r|json!({
+   "id":r.get::<Uuid,_>("id"),"title":r.get::<String,_>("title"),"description":r.get::<String,_>("description"),
+   "parent_id":r.get::<Option<Uuid>,_>("parent_id"),"type":r.get::<String,_>("type"),"status":r.get::<String,_>("status"),
+   "content":r.get::<String,_>("content"),"progress":r.get::<String,_>("progress")
+  })).collect();
+  let next:i32=sqlx::query_scalar("SELECT COALESCE(MAX(version),0)+1 FROM department_document_versions WHERE department_document_id=$1")
+   .bind(id).fetch_one(&mut *tx).await.map_err(db)?;
+  sqlx::query("INSERT INTO department_document_versions(department_document_id,version,snapshot,submitted_by) VALUES($1,$2,$3,$4)")
+   .bind(id).bind(next).bind(json!({"department_id":p.department_id,"year":p.year,"month":p.month,"kind":p.kind,"items":items})).bind(c.sub).execute(&mut *tx).await.map_err(db)?;
+  version=Some(next);
  }
- let id:Uuid=sqlx::query_scalar("INSERT INTO department_documents(department_id,year,month,kind,status,submitted_by,submitted_at) VALUES($1,$2,$3,$4,$5,$6,CASE WHEN $5='submitted' THEN now() ELSE NULL END) ON CONFLICT(department_id,year,month,kind) DO UPDATE SET status=EXCLUDED.status,submitted_by=EXCLUDED.submitted_by,submitted_at=EXCLUDED.submitted_at RETURNING id").bind(p.department_id).bind(p.year).bind(p.month).bind(&p.kind).bind(&p.status).bind(c.sub).fetch_one(&s.db).await.map_err(db)?;
- audit(&s,&c,"department.status",Some(id)).await; Ok(Json(json!({"id":id,"status":p.status})))
+ if p.status=="submitted" {
+  sqlx::query("UPDATE department_documents SET status='submitted',submitted_by=$2,submitted_at=COALESCE(submitted_at,now()) WHERE id=$1")
+   .bind(id).bind(c.sub).execute(&mut *tx).await.map_err(db)?;
+ } else {
+  sqlx::query("UPDATE department_documents SET status='draft',submitted_at=NULL WHERE id=$1")
+   .bind(id).execute(&mut *tx).await.map_err(db)?;
+ }
+ tx.commit().await.map_err(db)?;
+ audit(&s,&c,if p.status=="submitted" {"department.submit"} else {"department.reopen"},Some(id)).await;
+ Ok(Json(json!({"id":id,"status":p.status,"new_version":version})))
+}
+
+#[derive(Deserialize)] struct VersionsFilter {department_id:Uuid,year:i32,month:i32,kind:String}
+async fn department_versions(State(s):State<App>,h:HeaderMap,Query(p):Query<VersionsFilter>)->ResultApi<Json<Value>> {
+ let c=who(&s,&h)?;if !can_read(&c,p.department_id){return Err(forbidden());}check_period(p.year,p.month,&p.kind)?;
+ let rows=sqlx::query("SELECT v.id,v.version,v.snapshot,v.submitted_at,u.full_name AS author FROM department_document_versions v JOIN department_documents d ON d.id=v.department_document_id JOIN users u ON u.id=v.submitted_by WHERE d.department_id=$1 AND d.year=$2 AND d.month=$3 AND d.kind=$4 ORDER BY v.version DESC")
+ .bind(p.department_id).bind(p.year).bind(p.month).bind(&p.kind).fetch_all(&s.db).await.map_err(db)?;
+ Ok(Json(Value::Array(rows.iter().map(|r|json!({"id":r.get::<Uuid,_>("id"),"version":r.get::<i32,_>("version"),
+ "snapshot":r.get::<Value,_>("snapshot"),"submitted_at":r.get::<chrono::DateTime<Utc>,_>("submitted_at"),"author":r.get::<String,_>("author")})).collect())))
+}
+
+// Collaboration is scoped to the activity's department. Only thread members
+// and department managers/directors can read messages; all message writes
+// are timestamped, append-only.
+
+async fn inbox(State(s):State<App>,h:HeaderMap)->ResultApi<Json<Value>> {
+ let c=who(&s,&h)?;
+ let rows=sqlx::query(r#"
+ SELECT t.id,t.title,t.status,t.updated_at,a.id AS activity_id,a.title AS activity_title,
+ d.name AS department_name,a.department_id,
+ (SELECT COUNT(*) FROM user_notifications n WHERE n.thread_id=t.id AND n.user_id=$1 AND n.read_at IS NULL) AS unread,
+ (SELECT MAX(m.created_at) FROM activity_thread_messages m WHERE m.thread_id=t.id) AS last_message_at
+ FROM activity_thread_participants p
+ JOIN activity_threads t ON t.id=p.thread_id
+ JOIN activities a ON a.id=t.activity_id JOIN departments d ON d.id=a.department_id
+ WHERE p.user_id=$1
+ ORDER BY t.updated_at DESC LIMIT 150
+ "#).bind(c.sub).fetch_all(&s.db).await.map_err(db)?;
+ Ok(Json(Value::Array(rows.iter().map(|r|json!({
+  "id":r.get::<Uuid,_>("id"),"title":r.get::<String,_>("title"),"status":r.get::<String,_>("status"),
+  "activity_id":r.get::<Uuid,_>("activity_id"),"activity_title":r.get::<String,_>("activity_title"),
+  "department_name":r.get::<String,_>("department_name"),"department_id":r.get::<Uuid,_>("department_id"),"unread":r.get::<i64,_>("unread"),
+  "updated_at":r.get::<chrono::DateTime<Utc>,_>("updated_at"),
+  "last_message_at":r.get::<Option<chrono::DateTime<Utc>>,_>("last_message_at")
+ })).collect())))
+}
+async fn mark_thread_read(State(s):State<App>,h:HeaderMap,Path(id):Path<Uuid>)->ResultApi<Json<Value>> {
+ let c=who(&s,&h)?;
+ let member:bool=sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM activity_thread_participants WHERE thread_id=$1 AND user_id=$2)")
+  .bind(id).bind(c.sub).fetch_one(&s.db).await.map_err(db)?;
+ if !member{return Err(forbidden());}
+ sqlx::query("UPDATE activity_thread_participants SET last_read_at=now() WHERE thread_id=$1 AND user_id=$2")
+  .bind(id).bind(c.sub).execute(&s.db).await.map_err(db)?;
+ sqlx::query("UPDATE user_notifications SET read_at=now() WHERE thread_id=$1 AND user_id=$2 AND read_at IS NULL")
+  .bind(id).bind(c.sub).execute(&s.db).await.map_err(db)?;
+ Ok(Json(json!({"ok":true})))
+}
+
+async fn activity_people(State(s):State<App>,h:HeaderMap,Path(id):Path<Uuid>)->ResultApi<Json<Value>> {
+ let c=who(&s,&h)?;
+ let dept:Uuid=sqlx::query_scalar("SELECT department_id FROM activities WHERE id=$1").bind(id).fetch_optional(&s.db).await.map_err(db)?.ok_or_else(||bad("Aktivnost ne postoji"))?;
+ if !can_read(&c,dept){return Err(forbidden());}
+ let rows=sqlx::query("SELECT id,full_name,role FROM users WHERE active=true AND (department_id=$1 OR role IN ('director','admin')) ORDER BY full_name")
+ .bind(dept).fetch_all(&s.db).await.map_err(db)?;
+ Ok(Json(Value::Array(rows.iter().map(|r|json!({"id":r.get::<Uuid,_>("id"),"name":r.get::<String,_>("full_name"),"role":r.get::<String,_>("role")})).collect())))
+}
+async fn thread_access(s:&App,c:&Claims,id:Uuid)->ResultApi<(Uuid,Uuid,bool)> {
+ let row=sqlx::query("SELECT t.activity_id,a.department_id FROM activity_threads t JOIN activities a ON a.id=t.activity_id WHERE t.id=$1")
+  .bind(id).fetch_optional(&s.db).await.map_err(db)?.ok_or_else(||bad("Razgovor ne postoji"))?;
+ let a:Uuid=row.get("activity_id");let dept:Uuid=row.get("department_id");
+ let supervisor=director(c)||(c.role=="manager"&&c.department_id==Some(dept));
+ let member:bool=sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM activity_thread_participants WHERE thread_id=$1 AND user_id=$2)")
+  .bind(id).bind(c.sub).fetch_one(&s.db).await.map_err(db)?;
+ if !supervisor&&!member {return Err(forbidden());}
+ Ok((a,dept,supervisor))
+}
+async fn threads_list(State(s):State<App>,h:HeaderMap,Path(activity_id):Path<Uuid>)->ResultApi<Json<Value>> {
+ let c=who(&s,&h)?;
+ let dept:Uuid=sqlx::query_scalar("SELECT department_id FROM activities WHERE id=$1")
+  .bind(activity_id).fetch_optional(&s.db).await.map_err(db)?.ok_or_else(||bad("Aktivnost ne postoji"))?;
+ if !can_read(&c,dept){return Err(forbidden());}
+ let supervisor=director(&c)||(c.role=="manager"&&c.department_id==Some(dept));
+ let rows=sqlx::query("SELECT t.id,t.title,t.status,t.created_at,t.updated_at,u.full_name AS created_name, (SELECT COUNT(*) FROM activity_thread_messages m WHERE m.thread_id=t.id) AS message_count FROM activity_threads t JOIN users u ON u.id=t.created_by WHERE t.activity_id=$1 AND ($2 OR EXISTS(SELECT 1 FROM activity_thread_participants p WHERE p.thread_id=t.id AND p.user_id=$3)) ORDER BY t.updated_at DESC")
+  .bind(activity_id).bind(supervisor).bind(c.sub).fetch_all(&s.db).await.map_err(db)?;
+ Ok(Json(Value::Array(rows.iter().map(|r|json!({"id":r.get::<Uuid,_>("id"),"title":r.get::<String,_>("title"),"status":r.get::<String,_>("status"),"created_name":r.get::<String,_>("created_name"),"created_at":r.get::<chrono::DateTime<Utc>,_>("created_at"),"updated_at":r.get::<chrono::DateTime<Utc>,_>("updated_at"),"message_count":r.get::<i64,_>("message_count")})).collect())))
+}
+#[derive(Deserialize)] struct StartThread {title:String,participants:Vec<Uuid>,message:Option<String>}
+async fn thread_create(State(s):State<App>,h:HeaderMap,Path(activity_id):Path<Uuid>,Json(p):Json<StartThread>)->ResultApi<Json<Value>> {
+ let c=who(&s,&h)?;
+ let dept:Uuid=sqlx::query_scalar("SELECT department_id FROM activities WHERE id=$1").bind(activity_id).fetch_optional(&s.db).await.map_err(db)?.ok_or_else(||bad("Aktivnost ne postoji"))?;
+ if !can_manage(&c,dept){return Err(forbidden());}
+ if p.title.trim().is_empty()||p.title.len()>250||p.participants.len()>30||p.message.as_ref().is_some_and(|m|m.len()>12000){return Err(bad("Nevaljan naziv, broj sudionika ili duljina poruke"));}
+ let mut participants:HashSet<Uuid>=p.participants.into_iter().collect();participants.insert(c.sub);
+ let count:i64=sqlx::query_scalar("SELECT COUNT(*) FROM users WHERE active=true AND id = ANY($1) AND (department_id=$2 OR role IN ('admin','director'))")
+  .bind(participants.iter().copied().collect::<Vec<_>>()).bind(dept).fetch_one(&s.db).await.map_err(db)?;
+ if count!=participants.len() as i64{return Err(bad("Odabrani korisnik nema pristup ovom odjelu"));}
+ let mut tx=s.db.begin().await.map_err(db)?;
+ let id:Uuid=sqlx::query_scalar("INSERT INTO activity_threads(activity_id,title,created_by) VALUES($1,$2,$3) RETURNING id").bind(activity_id).bind(p.title.trim()).bind(c.sub).fetch_one(&mut *tx).await.map_err(db)?;
+ for person in participants {
+  sqlx::query("INSERT INTO activity_thread_participants(thread_id,user_id,added_by) VALUES($1,$2,$3)")
+   .bind(id).bind(person).bind(c.sub).execute(&mut *tx).await.map_err(db)?;
+  if person!=c.sub {
+   sqlx::query("INSERT INTO user_notifications(user_id,thread_id,kind) VALUES($1,$2,'invited')")
+    .bind(person).bind(id).execute(&mut *tx).await.map_err(db)?;
+  }
+ }
+ if let Some(message)=p.message.filter(|m|!m.trim().is_empty()){
+  sqlx::query("INSERT INTO activity_thread_messages(thread_id,author_id,body) VALUES($1,$2,$3)")
+   .bind(id).bind(c.sub).bind(message.trim()).execute(&mut *tx).await.map_err(db)?;
+ }
+ sqlx::query("INSERT INTO activity_thread_events(thread_id,actor_id,event_type) VALUES($1,$2,'created')").bind(id).bind(c.sub).execute(&mut *tx).await.map_err(db)?;
+ tx.commit().await.map_err(db)?;audit(&s,&c,"thread.create",Some(id)).await;
+ Ok(Json(json!({"id":id})))
+}
+async fn thread_detail(State(s):State<App>,h:HeaderMap,Path(id):Path<Uuid>)->ResultApi<Json<Value>> {
+ let c=who(&s,&h)?;thread_access(&s,&c,id).await?;
+ let t=sqlx::query("SELECT id,title,status,created_at,updated_at FROM activity_threads WHERE id=$1").bind(id).fetch_one(&s.db).await.map_err(db)?;
+ let people=sqlx::query("SELECT p.user_id,u.full_name,p.added_at FROM activity_thread_participants p JOIN users u ON u.id=p.user_id WHERE p.thread_id=$1 ORDER BY u.full_name").bind(id).fetch_all(&s.db).await.map_err(db)?;
+ let messages=sqlx::query("SELECT m.id,m.body,m.created_at,m.author_id,u.full_name AS author FROM activity_thread_messages m JOIN users u ON u.id=m.author_id WHERE m.thread_id=$1 ORDER BY m.created_at,m.id LIMIT 500").bind(id).fetch_all(&s.db).await.map_err(db)?;
+ let events=sqlx::query("SELECT e.event_type,e.payload,e.created_at,u.full_name AS author FROM activity_thread_events e JOIN users u ON u.id=e.actor_id WHERE e.thread_id=$1 ORDER BY e.created_at DESC LIMIT 100").bind(id).fetch_all(&s.db).await.map_err(db)?;
+ Ok(Json(json!({"id":t.get::<Uuid,_>("id"),"title":t.get::<String,_>("title"),"status":t.get::<String,_>("status"),
+ "created_at":t.get::<chrono::DateTime<Utc>,_>("created_at"),"updated_at":t.get::<chrono::DateTime<Utc>,_>("updated_at"),
+ "participants":people.iter().map(|r|json!({"id":r.get::<Uuid,_>("user_id"),"name":r.get::<String,_>("full_name"),"added_at":r.get::<chrono::DateTime<Utc>,_>("added_at")})).collect::<Vec<_>>(),
+ "messages":messages.iter().map(|r|json!({"id":r.get::<Uuid,_>("id"),"body":r.get::<String,_>("body"),"author":r.get::<String,_>("author"),"author_id":r.get::<Uuid,_>("author_id"),"created_at":r.get::<chrono::DateTime<Utc>,_>("created_at")})).collect::<Vec<_>>(),
+ "events":events.iter().map(|r|json!({"event_type":r.get::<String,_>("event_type"),"payload":r.get::<Value,_>("payload"),"author":r.get::<String,_>("author"),"created_at":r.get::<chrono::DateTime<Utc>,_>("created_at")})).collect::<Vec<_>>()
+ })))
+}
+#[derive(Deserialize)] struct SendMessage {body:String}
+async fn thread_send(State(s):State<App>,h:HeaderMap,Path(id):Path<Uuid>,Json(p):Json<SendMessage>)->ResultApi<Json<Value>> {
+ let c=who(&s,&h)?;thread_access(&s,&c,id).await?;
+ if p.body.trim().is_empty()||p.body.len()>12000{return Err(bad("Poruka mora sadržavati između 1 i 12000 znakova"));}
+ let status:String=sqlx::query_scalar("SELECT status FROM activity_threads WHERE id=$1").bind(id).fetch_one(&s.db).await.map_err(db)?;
+ if status=="done"{return Err(bad("Završeni razgovor prvo ponovno otvori"));}
+ let message_id:Uuid=sqlx::query_scalar("INSERT INTO activity_thread_messages(thread_id,author_id,body) VALUES($1,$2,$3) RETURNING id").bind(id).bind(c.sub).bind(p.body.trim()).fetch_one(&s.db).await.map_err(db)?;
+ sqlx::query("UPDATE activity_threads SET updated_at=now() WHERE id=$1").bind(id).execute(&s.db).await.map_err(db)?;
+ sqlx::query("INSERT INTO user_notifications(user_id,thread_id,kind) SELECT user_id,$1,'message' FROM activity_thread_participants WHERE thread_id=$1 AND user_id<>$2")
+  .bind(id).bind(c.sub).execute(&s.db).await.map_err(db)?;
+ audit(&s,&c,"thread.message",Some(id)).await;
+ Ok(Json(json!({"id":message_id})))
+}
+#[derive(Deserialize)] struct ThreadParticipant {user_id:Uuid}
+async fn thread_add_person(State(s):State<App>,h:HeaderMap,Path(id):Path<Uuid>,Json(p):Json<ThreadParticipant>)->ResultApi<Json<Value>> {
+ let c=who(&s,&h)?;let (_,dept,supervisor)=thread_access(&s,&c,id).await?;if !supervisor{return Err(forbidden());}
+ let allowed:bool=sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM users WHERE id=$1 AND active=true AND (department_id=$2 OR role IN ('director','admin')))")
+ .bind(p.user_id).bind(dept).fetch_one(&s.db).await.map_err(db)?;
+ if !allowed {return Err(bad("Korisnik nema pristup ovom odjelu"));}
+ let mut tx=s.db.begin().await.map_err(db)?;
+ let inserted=sqlx::query("INSERT INTO activity_thread_participants(thread_id,user_id,added_by) VALUES($1,$2,$3) ON CONFLICT DO NOTHING")
+ .bind(id).bind(p.user_id).bind(c.sub).execute(&mut *tx).await.map_err(db)?.rows_affected();
+ if inserted>0 {
+  sqlx::query("INSERT INTO activity_thread_events(thread_id,actor_id,event_type,payload) VALUES($1,$2,'participant_added',$3)")
+   .bind(id).bind(c.sub).bind(json!({"user_id":p.user_id})).execute(&mut *tx).await.map_err(db)?;
+  sqlx::query("UPDATE activity_threads SET updated_at=now() WHERE id=$1").bind(id).execute(&mut *tx).await.map_err(db)?;
+  sqlx::query("INSERT INTO user_notifications(user_id,thread_id,kind) VALUES($1,$2,'invited')")
+   .bind(p.user_id).bind(id).execute(&mut *tx).await.map_err(db)?;
+ }
+ tx.commit().await.map_err(db)?;Ok(Json(json!({"ok":true})))
+}
+#[derive(Deserialize)] struct ThreadStatus {status:String}
+async fn thread_status(State(s):State<App>,h:HeaderMap,Path(id):Path<Uuid>,Json(p):Json<ThreadStatus>)->ResultApi<Json<Value>> {
+ let c=who(&s,&h)?;let (_,_,supervisor)=thread_access(&s,&c,id).await?;if !supervisor{return Err(forbidden());}
+ if !["open","done"].contains(&p.status.as_str()){return Err(bad("Nevaljan status"));}
+ let mut tx=s.db.begin().await.map_err(db)?;
+ sqlx::query("UPDATE activity_threads SET status=$2,updated_at=now() WHERE id=$1").bind(id).bind(&p.status).execute(&mut *tx).await.map_err(db)?;
+ sqlx::query("INSERT INTO activity_thread_events(thread_id,actor_id,event_type,payload) VALUES($1,$2,'status_changed',$3)").bind(id).bind(c.sub).bind(json!({"status":p.status})).execute(&mut *tx).await.map_err(db)?;
+ tx.commit().await.map_err(db)?;audit(&s,&c,"thread.status",Some(id)).await;Ok(Json(json!({"ok":true})))
+}
+
+#[derive(Deserialize)] struct SectorFreshnessFilter {year:i32,month:i32,kind:String}
+async fn sector_freshness(State(s):State<App>,h:HeaderMap,Query(p):Query<SectorFreshnessFilter>)->ResultApi<Json<Value>> {
+ let c=who(&s,&h)?;if !director(&c){return Err(forbidden());}check_period(p.year,p.month,&p.kind)?;
+ let rows=sqlx::query("SELECT dd.department_id, COALESCE(MAX(v.version),0) AS version FROM department_documents dd LEFT JOIN department_document_versions v ON v.department_document_id=dd.id WHERE dd.year=$1 AND dd.month=$2 AND dd.kind=$3 GROUP BY dd.department_id")
+ .bind(p.year).bind(p.month).bind(&p.kind).fetch_all(&s.db).await.map_err(db)?;
+ Ok(Json(Value::Array(rows.iter().map(|r|json!({"department_id":r.get::<Uuid,_>("department_id"),"version":r.get::<i64,_>("version")})).collect())))
 }
 #[derive(Deserialize)] struct SectorFilter {year:i32,month:i32,kind:String}
 async fn sector_docs(State(s):State<App>,h:HeaderMap,Query(p):Query<SectorFilter>)->ResultApi<Json<Value>> {
@@ -356,15 +545,15 @@ async fn build_sector(State(s):State<App>,h:HeaderMap,Json(p):Json<BuildSector>)
   let d=sqlx::query("SELECT name,code FROM departments WHERE id=$1").bind(dept_id).fetch_optional(&s.db).await.map_err(db)?.ok_or_else(||bad("Nepoznat odjel"))?;
   let accepted:Option<String>=sqlx::query_scalar("SELECT status FROM department_documents WHERE department_id=$1 AND year=$2 AND month=$3 AND kind=$4").bind(dept_id).bind(p.year).bind(p.month).bind(&p.kind).fetch_optional(&s.db).await.map_err(db)?;
   if accepted.as_deref()!=Some("submitted") {return Err(bad(format!("Odjel {} još nije predao dokument",d.get::<String,_>("name"))));}
-  // Activities are included by default even before a monthly update is saved.
-  // A monthly update supplements the permanent description and may exclude the item.
-  let rows=sqlx::query("SELECT a.id,a.parent_id,a.title,a.description,a.type, COALESCE(u.content, '') AS content, COALESCE(u.progress, 'in_progress') AS progress FROM activities a LEFT JOIN activity_updates u ON u.activity_id=a.id AND u.year=$2 AND u.month=$3 AND u.kind=$4 WHERE a.department_id=$1 AND COALESCE(u.include_in_document, true)=true ORDER BY a.sort_order,a.created_at")
-   .bind(dept_id).bind(p.year).bind(p.month).bind(&p.kind).fetch_all(&s.db).await.map_err(db)?;
-  if rows.is_empty() {
-   return Err(bad(format!("Odjel {} nema nijednu stavku uključenu u dokument. Dodajte aktivnost ili provjerite oznaku 'U dokument'.",d.get::<String,_>("name"))));
-  }
-  let items:Vec<Value>=rows.iter().map(|r|json!({"id":r.get::<Uuid,_>("id"),"parent_id":r.get::<Option<Uuid>,_>("parent_id"),"title":r.get::<String,_>("title"),"description":r.get::<String,_>("description"),"type":r.get::<String,_>("type"),"content":r.get::<String,_>("content"),"progress":r.get::<String,_>("progress")})).collect();
-  sections.push(json!({"department_id":dept_id,"code":d.get::<String,_>("code"),"name":d.get::<String,_>("name"),"items":items}));
+  // A director must consume the submitted immutable snapshot, NOT live activities.
+  // This prevents subsequent edits from silently changing an accepted report.
+  let version_row=sqlx::query("SELECT v.version,v.snapshot FROM department_document_versions v JOIN department_documents dd ON dd.id=v.department_document_id WHERE dd.department_id=$1 AND dd.year=$2 AND dd.month=$3 AND dd.kind=$4 ORDER BY v.version DESC LIMIT 1")
+   .bind(dept_id).bind(p.year).bind(p.month).bind(&p.kind).fetch_optional(&s.db).await.map_err(db)?.ok_or_else(||bad("Odjel nema spremljenu predanu verziju"))?;
+  let source_version:i32=version_row.get("version");
+  let immutable:Value=version_row.get("snapshot");
+  let items=immutable.get("items").and_then(Value::as_array).ok_or_else(||bad("Predana verzija nema popis aktivnosti"))?;
+  if items.is_empty(){return Err(bad("Predana verzija odjela nema aktivnosti"));}
+  sections.push(json!({"department_id":dept_id,"code":d.get::<String,_>("code"),"name":d.get::<String,_>("name"),"source_version":source_version,"items":items}));
  }
  let title=format!("{} značajnijih aktivnosti za {:02}.{}.",if p.kind=="plan" {"PLAN"}else{"IZVJEŠĆE"},p.month,p.year);
  let snapshot=json!({"year":p.year,"month":p.month,"kind":p.kind,"title":title,"sections":sections});
@@ -417,9 +606,13 @@ async fn edit_sector(State(s):State<App>,h:HeaderMap,Path(id):Path<Uuid>,Json(p)
  if seen_items.is_empty() {return Err(bad("Sektorski dokument mora sadržavati barem jednu stavku"));}
  if new_sections.iter().all(|s| s.get("items").and_then(Value::as_array).map(|a|a.is_empty()).unwrap_or(true)) {return Err(bad("Završni dokument mora sadržavati barem jednu stavku"));}
  let mut snapshot=old; snapshot["sections"]=json!(new_sections);
+ let mut tx=s.db.begin().await.map_err(db)?;
  let n=sqlx::query("UPDATE sector_documents SET snapshot=$2,introduction=$3,conclusion=$4 WHERE id=$1 AND status='draft'")
-  .bind(id).bind(snapshot).bind(p.introduction).bind(p.conclusion).execute(&s.db).await.map_err(db)?.rows_affected();
+  .bind(id).bind(&snapshot).bind(&p.introduction).bind(&p.conclusion).execute(&mut *tx).await.map_err(db)?.rows_affected();
  if n==0 {return Err(bad("Dokument je u međuvremenu zaključan"));}
+ sqlx::query("INSERT INTO sector_document_edits(sector_document_id,snapshot,introduction,conclusion,edited_by) VALUES($1,$2,$3,$4,$5)")
+  .bind(id).bind(snapshot).bind(&p.introduction).bind(&p.conclusion).bind(c.sub).execute(&mut *tx).await.map_err(db)?;
+ tx.commit().await.map_err(db)?;
  audit(&s,&c,"sector.edit",Some(id)).await;Ok(Json(json!({"ok":true})))
 }
 
@@ -461,12 +654,22 @@ async fn health()->Json<Value> {Json(json!({"status":"ok"}))}
   .route("/api/activities",get(activities).post(create_activity)).route("/api/activities/{id}",patch(edit_activity))
   .route("/api/activity-search",get(search_activities))
   .route("/api/activities/{id}/history",get(activity_history))
+  .route("/api/activities/{id}/people",get(activity_people))
+  .route("/api/activities/{id}/threads",get(threads_list).post(thread_create))
+  .route("/api/threads/{id}",get(thread_detail))
+  .route("/api/inbox",get(inbox))
+  .route("/api/threads/{id}/read",post(mark_thread_read))
+  .route("/api/threads/{id}/messages",post(thread_send))
+  .route("/api/threads/{id}/participants",post(thread_add_person))
+  .route("/api/threads/{id}/status",patch(thread_status))
   .route("/api/updates",get(updates).post(save_update))
   .route("/api/updates/carry-forward",post(carry_forward))
   .route("/api/plan-reference",get(plan_reference))
   .route("/api/activities/reorder",post(reorder_activities))
   .route("/api/activities/{id}/move",post(move_activity))
   .route("/api/department-documents",get(department_docs).post(save_department_doc))
+  .route("/api/department-document-versions",get(department_versions))
+  .route("/api/sector-document-freshness",get(sector_freshness))
   .route("/api/sector-documents",get(sector_docs).post(build_sector))
   .route("/api/sector-documents/{id}",patch(edit_sector))
   .route("/api/sector-documents/{id}/lock",post(lock_sector))

@@ -33,7 +33,7 @@ export default function MonthlyEntry({item,initial,planReference,kind,disabled,b
     {expanded?<ChevronDown size={18}/>:<ChevronRight size={18}/>}
     <span className="monthly-card-heading"><strong>{item.title}</strong></span>
    </button>
-   <div className="monthly-card-flags"><span className={changed?'monthly-unsaved':'monthly-state'}>{changed?'Nije spremljeno':saved?'Spremljeno':'Bez unosa'}</span></div>
+   <div className="monthly-card-flags"><span className={changed?'monthly-unsaved':'monthly-state'}>{changed?'Nije spremljeno':saved?'Spremljeno':'Bez unosa'}</span>{initial?.updated_at&&<time className="monthly-timestamp" dateTime={initial.updated_at}>{new Date(initial.updated_at).toLocaleString('hr-HR')}</time>}</div>
   </div>
   {expanded&&<div className="monthly-card-body">
    {item.description.trim()&&<details className="monthly-context"><summary>Opis aktivnosti</summary><p>{item.description}</p></details>}
