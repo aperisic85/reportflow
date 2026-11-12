@@ -72,6 +72,25 @@ class NumberingTests(unittest.TestCase):
                 with self.assertRaises(FileNotFoundError):
                     populate_modern(fixture(), memorandum=True)
 
+    def test_approved_modern_document_has_qr_and_notice(self):
+        data = fixture()
+        approval = {
+            "document_number": "RF-SP-2026-11-I-v2",
+            "approved_by": "Direktor sektora",
+            "approved_at": "2026-11-12T13:00:00+00:00",
+            "verification_url": "https://reportflow.example.hr/verify/00000000-0000-4000-8000-000000000001",
+        }
+        result = Document(io.BytesIO(populate_modern(data, approval=approval)))
+        text = "\\n".join(p.text for p in result.paragraphs)
+        self.assertIn("RF-SP-2026-11-I-v2", text)
+        self.assertIn("INTERNO ELEKTRONIČKI ODOBRENO", text)
+        self.assertIn("nije kvalificirani elektronički potpis", text)
+        self.assertTrue(result.inline_shapes, "Verification QR image is missing")
+
+    def test_approval_requires_complete_metadata(self):
+        with self.assertRaises(ValueError):
+            populate_modern(fixture(), approval={"document_number": "RF-TEST"})
+
     def test_both_export_styles_preserve_subactivity_number(self):
         data = fixture()
         for render in (populate, populate_modern):
