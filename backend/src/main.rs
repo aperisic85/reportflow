@@ -34,7 +34,7 @@ fn can_read(c:&Claims,dept:Uuid)->bool { matches!(c.role.as_str(),"manager"|"emp
 fn can_write(c:&Claims,dept:Uuid)->bool { matches!(c.role.as_str(),"manager"|"employee") && c.department_id==Some(dept) }
 fn can_manage(c:&Claims,dept:Uuid)->bool {c.role=="manager"&&c.department_id==Some(dept)}
 fn director(c:&Claims)->bool {c.role=="director"&&c.sector_id.is_some()}
-async async fn guard_dept(s:&App,c:&Claims,dept:Uuid,action:&str)->ResultApi<()> {
+async fn guard_dept(s:&App,c:&Claims,dept:Uuid,action:&str)->ResultApi<()> {
  if matches!(c.role.as_str(),"admin"|"org_admin"){return Err(forbidden());}
  let sector:Option<Uuid>=sqlx::query_scalar("SELECT sector_id FROM departments WHERE id=$1")
    .bind(dept).fetch_optional(&s.db).await.map_err(db)?;
