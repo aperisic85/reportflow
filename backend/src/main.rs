@@ -237,14 +237,23 @@ async fn create_activity(State(s):State<App>,h:HeaderMap,Json(p):Json<NewActivit
 #[derive(Deserialize)] struct EditActivity {title:String,description:String,status:String,sort_order:i32}
 async fn edit_activity(State(s):State<App>,h:HeaderMap,Path(id):Path<Uuid>,Json(p):Json<EditActivity>)->ResultApi<Json<Value>> {
  let c=who(&s,&h)?;
- let row=sqlx::query("SELECT department_id,created_by FROM activities WHERE id=$1").bind(id).fetch_optional(&s.db).await.map_err(db)?.ok_or_else(||bad("Aktivnost ne postoji"))?;
- let dept:Uuid=row.get("department_id"); let owner:Option<Uuid>=row.get("created_by");
- if !can_write(&c,dept) || (c.role=="employee" && owner!=Some(c.sub)) {return Err(forbidden());}
- if !["in_progress","completed","paused","cancelled"].contains(&p.status.as_str()) {return Err(bad("Nevaljan status"));}
- sqlx::query("UPDATE activities SET title=$2,description=$3,status=$4,sort_order=$5,updated_at=now() WHERE id=$1").bind(id).bind(p.title).bind(p.description).bind(p.status).bind(p.sort_order).execute(&s.db).await.map_err(db)?;
- audit(&s,&c,"activity.update",Some(id)).await; Ok(Json(json!({"ok":true})))
+ if p.title.trim().is_empty()||p.title.len()>1000||p.description.len()>12000 {return Err(bad("Nevaljan naslov ili opis"));}
+ if !["in_progress","completed","paused","cancelled"].contains(&p.status.as_str()){return Err(bad("Nevaljan status"));}
+ let mut tx=s.db.begin().await.map_err(db)?;
+ let row=sqlx::query("SELECT department_id,created_by,title,description FROM activities WHERE id=$1 FOR UPDATE")
+  .bind(id).fetch_optional(&mut *tx).await.map_err(db)?.ok_or_else(||bad("Aktivnost ne postoji"))?;
+ let dept:Uuid=row.get("department_id");let owner:Option<Uuid>=row.get("created_by");
+ if !can_write(&c,dept)||(c.role=="employee"&&owner!=Some(c.sub)){return Err(forbidden());}
+ let old_title:String=row.get("title");let old_description:String=row.get("description");
+ if old_title!=p.title||old_description!=p.description {
+  sqlx::query("INSERT INTO activity_field_changes(activity_id,changed_by,old_title,new_title,old_description,new_description) VALUES($1,$2,$3,$4,$5,$6)")
+   .bind(id).bind(c.sub).bind(&old_title).bind(&p.title).bind(&old_description).bind(&p.description).execute(&mut *tx).await.map_err(db)?;
+ }
+ sqlx::query("UPDATE activities SET title=$2,description=$3,status=$4,sort_order=$5,updated_at=now() WHERE id=$1")
+  .bind(id).bind(&p.title).bind(&p.description).bind(&p.status).bind(p.sort_order).execute(&mut *tx).await.map_err(db)?;
+ tx.commit().await.map_err(db)?;
+ audit(&s,&c,"activity.update",Some(id)).await;Ok(Json(json!({"ok":true})))
 }
-
 #[derive(Deserialize)] struct RenameActivity {title:String,description:String}
 async fn rename_activity(State(s):State<App>,h:HeaderMap,Path(id):Path<Uuid>,Json(p):Json<RenameActivity>)->ResultApi<Json<Value>> {
  let c=who(&s,&h)?;
