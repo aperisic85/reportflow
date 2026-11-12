@@ -17,8 +17,8 @@ export async function api<T>(path:string, options:RequestInit={}):Promise<T> {
 export const post=<T>(path:string,value:unknown)=>api<T>(path,{method:'POST',body:JSON.stringify(value)});
 export const patch=<T>(path:string,value:unknown)=>api<T>(path,{method:'PATCH',body:JSON.stringify(value)});
 export function q(params:Record<string,string|number>) {return '?'+new URLSearchParams(Object.entries(params).map(([k,v])=>[k,String(v)])).toString();}
-export async function download(id:string,format:'docx'|'pdf') {
+export async function download(id:string,format:'docx'|'pdf'|'modern-pdf') {
   const res=await fetch(`/api/sector-documents/${id}/export/${format}`,{headers:{Authorization:'Bearer '+token()}});
   if(!res.ok) throw new Error(await res.text());
-  const blob=await res.blob();const url=URL.createObjectURL(blob);const a=document.createElement('a');a.href=url;a.download=`izvjesce-${id}.${format}`;a.click();setTimeout(()=>URL.revokeObjectURL(url),2000);
+  const blob=await res.blob();const url=URL.createObjectURL(blob);const a=document.createElement('a');a.href=url;a.download=`izvjesce-${id}${format==='modern-pdf'?'-modern':''}.${format==='docx'?'docx':'pdf'}`;a.click();setTimeout(()=>URL.revokeObjectURL(url),2000);
 }

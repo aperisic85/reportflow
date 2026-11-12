@@ -4,11 +4,11 @@ import type {Activity,Update} from './api';
 
 type Kind='plan'|'report';
 type Props={
- item:Activity;initial?:Update;planReference?:string;kind:Kind;disabled:boolean;busy:boolean;
+ item:Activity;number?:string;initial?:Update;planReference?:string;kind:Kind;disabled:boolean;busy:boolean;
  onSave:(content:string,progress:string,include:boolean)=>void;
 };
 const labels:Record<string,string>={in_progress:'U tijeku',completed:'Završeno',postponed:'Odgođeno',not_started:'Nije započeto'};
-export default function MonthlyEntry({item,initial,planReference,kind,disabled,busy,onSave}:Props){
+export default function MonthlyEntry({item,number,initial,planReference,kind,disabled,busy,onSave}:Props){
  const [content,setContent]=useState(initial?.content??'');
  const [progress,setProgress]=useState(initial?.progress??(kind==='plan'?'not_started':'in_progress'));
  const [include,setInclude]=useState(initial?.include_in_document??true);
@@ -31,7 +31,7 @@ export default function MonthlyEntry({item,initial,planReference,kind,disabled,b
   <div className="monthly-card-top">
    <button className="monthly-expand" type="button" onClick={()=>setExpanded(p=>!p)} aria-expanded={expanded}>
     {expanded?<ChevronDown size={18}/>:<ChevronRight size={18}/>}
-    <span className="monthly-card-heading"><strong>{item.title}</strong></span>
+    <span className="monthly-card-heading"><strong>{number?number+'.  ':''}{item.title}</strong></span>
    </button>
    <div className="monthly-card-flags"><span className={changed?'monthly-unsaved':'monthly-state'}>{changed?'Nije spremljeno':saved?'Spremljeno':'Bez unosa'}</span>{initial?.updated_at&&<time className="monthly-timestamp" dateTime={initial.updated_at} title={'Izmijenjeno: '+(initial.updated_by_name??'Korisnik nije poznat')}>Izmjena: {new Date(initial.updated_at).toLocaleString('hr-HR',{dateStyle:'short',timeStyle:'medium'})}</time>}</div>
   </div>

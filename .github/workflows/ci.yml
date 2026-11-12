@@ -31,4 +31,5 @@ jobs:
         with:
           python-version: '3.12'
       - run: pip install -r document-service/requirements.txt
-      - run: python -m py_compile document-service/app.py
+      - run: python -m py_compile document-service/app.py document-service/modern.py document-service/numbering.py
+      - run: python -m unittest discover -s document-service -p 'test_*.py' -v

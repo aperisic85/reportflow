@@ -607,3 +607,27 @@ button:focus-visible,summary:focus-visible{outline:3px solid #e58d1a;outline-off
 .rf-entry-created{font-size:11px!important;color:#746353;line-height:1.5;margin:4px 0!important}
 .rf-preview-source{font-size:12px;color:#9a4a0b;margin:-3px 0 16px}
 @media(max-width:900px){.rf-inbox-area{margin:6px 0 0;padding-top:8px}.rf-inbox-button{width:auto}}
+
+
+/* Nested activities are visually subordinate, not merely indicated by a glyph. */
+.ux-registry-item.is-child,
+.activity-hierarchy-row.is-child,
+.report-hierarchy-row.is-child{
+ margin-left:calc(min(var(--activity-depth, 0),5)*21px);
+ border-left:2px solid #e9bb73;
+ padding-left:13px;
+}
+.ux-registry-item.is-child{background:#fffbf5;padding-top:11px;padding-bottom:11px}
+.ux-parent-indicator{display:inline-flex;align-items:flex-start;justify-content:flex-end;min-width:34px;font-size:12px;font-weight:750;color:#b46115}
+.activity-hierarchy-row.is-child{margin-top:3px;margin-bottom:4px}
+.activity-hierarchy-row.is-child .monthly-card-top{padding-left:8px}
+.report-hierarchy-row.is-child{background:#fffcf6}
+.report-item{margin-left:calc(min(var(--report-depth, 0),5)*24px)}
+.report-item-child{padding-left:14px;border-left:2px solid #ebc994}
+.report-item-number{color:#b66016;font-variant-numeric:tabular-nums}
+@media(max-width:650px){
+ .ux-registry-item.is-child,.activity-hierarchy-row.is-child,.report-hierarchy-row.is-child{
+  margin-left:calc(min(var(--activity-depth, 0),5)*12px);padding-left:8px
+ }
+ .report-item{margin-left:calc(min(var(--report-depth, 0),5)*12px)}
+}
