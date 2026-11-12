@@ -219,7 +219,7 @@ async fn dashboard(State(s):State<App>,h:HeaderMap,Query(p):Query<DashboardFilte
 
 #[derive(Deserialize)] struct FilterDept {department_id:Uuid}
 async fn activities(State(s):State<App>,h:HeaderMap,Query(p):Query<FilterDept>)->ResultApi<Json<Value>> {
- let c=who(&s,&h)?; if !can_read(&c,p.department_id) {return Err(forbidden());}
+ let c=who(&s,&h)?; guard_dept(&s,&c,p.department_id,"read").await?;
  let rows=sqlx::query("SELECT id,department_id,parent_id,title,description,type,status,sort_order,created_by,created_at,updated_at FROM activities WHERE department_id=$1 ORDER BY sort_order,created_at").bind(p.department_id).fetch_all(&s.db).await.map_err(db)?;
  Ok(Json(Value::Array(rows.iter().map(|r|json!({"id":r.get::<Uuid,_>("id"),"department_id":r.get::<Uuid,_>("department_id"),"parent_id":r.get::<Option<Uuid>,_>("parent_id"),"title":r.get::<String,_>("title"),"description":r.get::<String,_>("description"),"type":r.get::<String,_>("type"),"status":r.get::<String,_>("status"),"sort_order":r.get::<i32,_>("sort_order"),"created_by":r.get::<Option<Uuid>,_>("created_by"),"created_at":r.get::<chrono::DateTime<Utc>,_>("created_at"),"updated_at":r.get::<chrono::DateTime<Utc>,_>("updated_at")})).collect())))
 }
@@ -290,7 +290,7 @@ async fn activity_history(State(s):State<App>,h:HeaderMap,Path(id):Path<Uuid>)->
   .bind(id).fetch_optional(&s.db).await.map_err(db)?
   .ok_or_else(||ErrApi(StatusCode::NOT_FOUND,"Aktivnost nije pronađena".into()))?;
  let dept:Uuid=a.get("department_id");
- if !can_read(&c,dept) {return Err(forbidden());}
+ guard_dept(&s,&c,dept,"read").await?;
  let rows=sqlx::query(r#"
  SELECT u.id,u.year,u.month,u.kind,u.content,u.progress,u.include_in_document,u.updated_at,
         usr.full_name AS updated_by_name
@@ -321,7 +321,7 @@ async fn activity_history(State(s):State<App>,h:HeaderMap,Path(id):Path<Uuid>)->
 
 #[derive(Deserialize)] struct NewActivity { department_id:Uuid,parent_id:Option<Uuid>,title:String,description:Option<String>,#[serde(rename="type")] activity_type:String,sort_order:Option<i32> }
 async fn create_activity(State(s):State<App>,h:HeaderMap,Json(p):Json<NewActivity>)->ResultApi<Json<Value>> {
- let c=who(&s,&h)?; if !can_write(&c,p.department_id) {return Err(forbidden());}
+ let c=who(&s,&h)?; guard_dept(&s,&c,p.department_id,"write").await?;
  if p.title.trim().is_empty() || !["ongoing","project","one_off"].contains(&p.activity_type.as_str()) {return Err(bad("Naziv ili vrsta aktivnosti nije valjana"));}
  if let Some(parent)=p.parent_id { let d:Option<Uuid>=sqlx::query_scalar("SELECT department_id FROM activities WHERE id=$1").bind(parent).fetch_optional(&s.db).await.map_err(db)?; if d!=Some(p.department_id) {return Err(bad("Podstavka mora biti iz istog odjela"));} }
  let id:Uuid=sqlx::query_scalar("INSERT INTO activities(department_id,parent_id,title,description,type,sort_order,created_by) VALUES($1,$2,$3,$4,$5,$6,$7) RETURNING id").bind(p.department_id).bind(p.parent_id).bind(p.title).bind(p.description.unwrap_or_default()).bind(p.activity_type).bind(p.sort_order.unwrap_or(0)).bind(c.sub).fetch_one(&s.db).await.map_err(db)?;
@@ -336,7 +336,7 @@ async fn edit_activity(State(s):State<App>,h:HeaderMap,Path(id):Path<Uuid>,Json(
  let row=sqlx::query("SELECT department_id,created_by,title,description FROM activities WHERE id=$1 FOR UPDATE")
   .bind(id).fetch_optional(&mut *tx).await.map_err(db)?.ok_or_else(||bad("Aktivnost ne postoji"))?;
  let dept:Uuid=row.get("department_id");let owner:Option<Uuid>=row.get("created_by");
- if !can_write(&c,dept)||(c.role=="employee"&&owner!=Some(c.sub)){return Err(forbidden());}
+ guard_dept(&s,&c,dept,"write").await?;if c.role=="employee"&&owner!=Some(c.sub){return Err(forbidden());}
  let old_title:String=row.get("title");let old_description:String=row.get("description");
  if old_title!=p.title||old_description!=p.description {
   sqlx::query("INSERT INTO activity_field_changes(activity_id,changed_by,old_title,new_title,old_description,new_description) VALUES($1,$2,$3,$4,$5,$6)")
@@ -357,7 +357,7 @@ async fn rename_activity(State(s):State<App>,h:HeaderMap,Path(id):Path<Uuid>,Jso
  let row=sqlx::query("SELECT department_id,title,description FROM activities WHERE id=$1 FOR UPDATE")
   .bind(id).fetch_optional(&mut *tx).await.map_err(db)?.ok_or_else(||bad("Aktivnost ne postoji"))?;
  let dept:Uuid=row.get("department_id");
- if !can_manage(&c,dept){return Err(forbidden());}
+ guard_dept(&s,&c,dept,"manage").await?;
  let old_title:String=row.get("title");let old_description:String=row.get("description");
  let new_title=p.title.trim();
  if old_title!=new_title || old_description!=p.description {
@@ -374,7 +374,7 @@ async fn activity_field_history(State(s):State<App>,h:HeaderMap,Path(id):Path<Uu
  let c=who(&s,&h)?;
  let dept:Uuid=sqlx::query_scalar("SELECT department_id FROM activities WHERE id=$1")
  .bind(id).fetch_optional(&s.db).await.map_err(db)?.ok_or_else(||bad("Aktivnost ne postoji"))?;
- if !can_read(&c,dept){return Err(forbidden());}
+ guard_dept(&s,&c,dept,"read").await?;
  let rows=sqlx::query("SELECT h.id,h.old_title,h.new_title,h.old_description,h.new_description,h.changed_at,u.full_name AS author FROM activity_field_changes h JOIN users u ON u.id=h.changed_by WHERE h.activity_id=$1 ORDER BY h.changed_at DESC,h.id DESC LIMIT 100")
  .bind(id).fetch_all(&s.db).await.map_err(db)?;
  Ok(Json(Value::Array(rows.iter().map(|r|json!({
@@ -387,7 +387,7 @@ async fn activity_field_history(State(s):State<App>,h:HeaderMap,Path(id):Path<Uu
 #[derive(Deserialize)] struct PeriodFilter {department_id:Uuid,year:i32,month:i32,kind:String}
 fn check_period(y:i32,m:i32,k:&str)->ResultApi<()> { if !(2000..=2100).contains(&y)||!(1..=12).contains(&m)||!["plan","report"].contains(&k) {Err(bad("Nevaljan mjesec, godina ili vrsta dokumenta"))} else {Ok(())} }
 async fn updates(State(s):State<App>,h:HeaderMap,Query(p):Query<PeriodFilter>)->ResultApi<Json<Value>> {
- let c=who(&s,&h)?; if !can_read(&c,p.department_id) {return Err(forbidden());} check_period(p.year,p.month,&p.kind)?;
+ let c=who(&s,&h)?; guard_dept(&s,&c,p.department_id,"read").await?; check_period(p.year,p.month,&p.kind)?;
  let rows=sqlx::query("SELECT u.id,u.activity_id,u.content,u.progress,u.include_in_document,u.updated_at FROM activity_updates u JOIN activities a ON a.id=u.activity_id WHERE a.department_id=$1 AND u.year=$2 AND u.month=$3 AND u.kind=$4 ORDER BY a.sort_order,a.created_at").bind(p.department_id).bind(p.year).bind(p.month).bind(p.kind).fetch_all(&s.db).await.map_err(db)?;
  Ok(Json(Value::Array(rows.iter().map(|r|json!({"id":r.get::<Uuid,_>("id"),"activity_id":r.get::<Uuid,_>("activity_id"),"content":r.get::<String,_>("content"),"progress":r.get::<String,_>("progress"),"include_in_document":r.get::<bool,_>("include_in_document"),"updated_at":r.get::<chrono::DateTime<Utc>,_>("updated_at")})).collect())))
 }
@@ -396,7 +396,7 @@ async fn save_update(State(s):State<App>,h:HeaderMap,Json(p):Json<SaveUpdate>)->
  let c=who(&s,&h)?; check_period(p.year,p.month,&p.kind)?;
  let r=sqlx::query("SELECT department_id,created_by FROM activities WHERE id=$1").bind(p.activity_id).fetch_optional(&s.db).await.map_err(db)?.ok_or_else(||bad("Aktivnost ne postoji"))?;
  let d:Uuid=r.get("department_id"); let owner:Option<Uuid>=r.get("created_by");
- if !can_write(&c,d) || (c.role=="employee" && owner!=Some(c.sub)) {return Err(forbidden());}
+ guard_dept(&s,&c,d,"write").await?;if c.role=="employee"&&owner!=Some(c.sub){return Err(forbidden());}
  if !["in_progress","completed","postponed","not_started"].contains(&p.progress.as_str()) {return Err(bad("Nevaljan status realizacije"));}
  let status:Option<String>=sqlx::query_scalar("SELECT status FROM department_documents WHERE department_id=$1 AND year=$2 AND month=$3 AND kind=$4").bind(d).bind(p.year).bind(p.month).bind(&p.kind).fetch_optional(&s.db).await.map_err(db)?;
  if status.as_deref()==Some("submitted") {return Err(bad("Dokument je predan; voditelj ga prvo mora vratiti u nacrt"));}
@@ -411,7 +411,7 @@ async fn save_update(State(s):State<App>,h:HeaderMap,Json(p):Json<SaveUpdate>)->
 #[derive(Deserialize)] struct CarryFilter {department_id:Uuid,year:i32,month:i32}
 fn previous_period(year:i32,month:i32)->(i32,i32) {if month==1 {(year-1,12)} else {(year,month-1)}}
 async fn carry_candidates(State(s):State<App>,h:HeaderMap,Query(p):Query<CarryFilter>)->ResultApi<Json<Value>> {
- let c=who(&s,&h)?;if !can_read(&c,p.department_id){return Err(forbidden());}
+ let c=who(&s,&h)?;guard_dept(&s,&c,p.department_id,"read").await?;
  check_period(p.year,p.month,"plan")?;
  let (previous_year,previous_month)=previous_period(p.year,p.month);
  let rows=sqlx::query(r#"
@@ -430,7 +430,7 @@ async fn carry_candidates(State(s):State<App>,h:HeaderMap,Query(p):Query<CarryFi
  })).collect::<Vec<_>>()})))
 }
 async fn carry_forward(State(s):State<App>,h:HeaderMap,Json(p):Json<CarryRequest>)->ResultApi<Json<Value>> {
- let c=who(&s,&h)?;if !can_manage(&c,p.department_id){return Err(forbidden());}
+ let c=who(&s,&h)?;guard_dept(&s,&c,p.department_id,"manage").await?;
  check_period(p.year,p.month,&p.kind)?;
  if p.kind!="plan" {return Err(bad("Nedovršene stavke prenose se u plan sljedećeg mjeseca"));}
  if p.activity_ids.len()>1000 {return Err(bad("Previše odabranih aktivnosti"));}
@@ -459,7 +459,7 @@ async fn carry_forward(State(s):State<App>,h:HeaderMap,Json(p):Json<CarryRequest
 
 // A plan is a reference for reporting, not evidence of work already completed.
 async fn plan_reference(State(s):State<App>,h:HeaderMap,Query(p):Query<PeriodFilter>)->ResultApi<Json<Value>> {
- let c=who(&s,&h)?; if !can_read(&c,p.department_id) {return Err(forbidden());} check_period(p.year,p.month,&p.kind)?;
+ let c=who(&s,&h)?; guard_dept(&s,&c,p.department_id,"read").await?; check_period(p.year,p.month,&p.kind)?;
  let rows=sqlx::query("SELECT a.id AS activity_id,a.title,COALESCE(NULLIF(u.content,''),a.description) AS planned FROM activities a JOIN activity_updates u ON u.activity_id=a.id AND u.year=$2 AND u.month=$3 AND u.kind='plan' WHERE a.department_id=$1 AND u.include_in_document=true ORDER BY a.sort_order,a.created_at")
   .bind(p.department_id).bind(p.year).bind(p.month).fetch_all(&s.db).await.map_err(db)?;
  Ok(Json(Value::Array(rows.iter().map(|r|json!({"activity_id":r.get::<Uuid,_>("activity_id"),"title":r.get::<String,_>("title"),"planned":r.get::<String,_>("planned")})).collect())))
@@ -467,7 +467,7 @@ async fn plan_reference(State(s):State<App>,h:HeaderMap,Query(p):Query<PeriodFil
 
 #[derive(Deserialize)] struct ReorderActivities {department_id:Uuid,ordered_ids:Vec<Uuid>}
 async fn reorder_activities(State(s):State<App>,h:HeaderMap,Json(p):Json<ReorderActivities>)->ResultApi<Json<Value>> {
- let c=who(&s,&h)?; if !can_manage(&c,p.department_id) {return Err(forbidden());}
+ let c=who(&s,&h)?; guard_dept(&s,&c,p.department_id,"manage").await?;
  let mut tx=s.db.begin().await.map_err(db)?;
  let rows=sqlx::query("SELECT id FROM activities WHERE department_id=$1 FOR UPDATE")
   .bind(p.department_id).fetch_all(&mut *tx).await.map_err(db)?;
@@ -487,7 +487,7 @@ async fn reorder_activities(State(s):State<App>,h:HeaderMap,Json(p):Json<Reorder
 async fn move_activity(State(s):State<App>,h:HeaderMap,Path(id):Path<Uuid>,Json(p):Json<MoveActivity>)->ResultApi<Json<Value>> {
  let c=who(&s,&h)?;
  let dept:Uuid=sqlx::query_scalar("SELECT department_id FROM activities WHERE id=$1").bind(id).fetch_optional(&s.db).await.map_err(db)?.ok_or_else(||bad("Aktivnost ne postoji"))?;
- if !can_manage(&c,dept) {return Err(forbidden());}
+ guard_dept(&s,&c,dept,"manage").await?;
  if let Some(parent)=p.parent_id {
   let pd:Option<Uuid>=sqlx::query_scalar("SELECT department_id FROM activities WHERE id=$1").bind(parent).fetch_optional(&s.db).await.map_err(db)?;
   if pd!=Some(dept) {return Err(bad("Nadređena aktivnost mora biti u istom odjelu"));}
@@ -502,13 +502,13 @@ async fn move_activity(State(s):State<App>,h:HeaderMap,Path(id):Path<Uuid>,Json(
 }
 
 async fn department_docs(State(s):State<App>,h:HeaderMap,Query(p):Query<PeriodFilter>)->ResultApi<Json<Value>> {
- let c=who(&s,&h)?; if !can_read(&c,p.department_id) {return Err(forbidden());} check_period(p.year,p.month,&p.kind)?;
+ let c=who(&s,&h)?; guard_dept(&s,&c,p.department_id,"read").await?; check_period(p.year,p.month,&p.kind)?;
  let row=sqlx::query("SELECT id,status,submitted_at FROM department_documents WHERE department_id=$1 AND year=$2 AND month=$3 AND kind=$4").bind(p.department_id).bind(p.year).bind(p.month).bind(p.kind).fetch_optional(&s.db).await.map_err(db)?;
  Ok(Json(match row {Some(r)=>json!({"id":r.get::<Uuid,_>("id"),"status":r.get::<String,_>("status"),"submitted_at":r.get::<Option<chrono::DateTime<Utc>>,_>("submitted_at")}),None=>json!({"status":"draft"})}))
 }
 #[derive(Deserialize)] struct SubmitDept {department_id:Uuid,year:i32,month:i32,kind:String,status:String}
 async fn save_department_doc(State(s):State<App>,h:HeaderMap,Json(p):Json<SubmitDept>)->ResultApi<Json<Value>> {
- let c=who(&s,&h)?; if !can_manage(&c,p.department_id) {return Err(forbidden());} check_period(p.year,p.month,&p.kind)?;
+ let c=who(&s,&h)?; guard_dept(&s,&c,p.department_id,"manage").await?; check_period(p.year,p.month,&p.kind)?;
  if !["draft","submitted"].contains(&p.status.as_str()) {return Err(bad("Nevaljan status dokumenta"));}
  if p.status=="submitted" && p.kind=="report" {
   // Use the business-local calendar, independent of the server's configured timezone.
@@ -553,7 +553,7 @@ async fn save_department_doc(State(s):State<App>,h:HeaderMap,Json(p):Json<Submit
 
 #[derive(Deserialize)] struct VersionsFilter {department_id:Uuid,year:i32,month:i32,kind:String}
 async fn department_versions(State(s):State<App>,h:HeaderMap,Query(p):Query<VersionsFilter>)->ResultApi<Json<Value>> {
- let c=who(&s,&h)?;if !can_read(&c,p.department_id){return Err(forbidden());}check_period(p.year,p.month,&p.kind)?;
+ let c=who(&s,&h)?;guard_dept(&s,&c,p.department_id,"read").await?;check_period(p.year,p.month,&p.kind)?;
  let rows=sqlx::query("SELECT v.id,v.version,v.snapshot,v.submitted_at,u.full_name AS author FROM department_document_versions v JOIN department_documents d ON d.id=v.department_document_id JOIN users u ON u.id=v.submitted_by WHERE d.department_id=$1 AND d.year=$2 AND d.month=$3 AND d.kind=$4 ORDER BY v.version DESC")
  .bind(p.department_id).bind(p.year).bind(p.month).bind(&p.kind).fetch_all(&s.db).await.map_err(db)?;
  Ok(Json(Value::Array(rows.iter().map(|r|json!({"id":r.get::<Uuid,_>("id"),"version":r.get::<i32,_>("version"),
@@ -600,7 +600,7 @@ async fn mark_thread_read(State(s):State<App>,h:HeaderMap,Path(id):Path<Uuid>)->
 async fn activity_people(State(s):State<App>,h:HeaderMap,Path(id):Path<Uuid>)->ResultApi<Json<Value>> {
  let c=who(&s,&h)?;
  let dept:Uuid=sqlx::query_scalar("SELECT department_id FROM activities WHERE id=$1").bind(id).fetch_optional(&s.db).await.map_err(db)?.ok_or_else(||bad("Aktivnost ne postoji"))?;
- if !can_read(&c,dept){return Err(forbidden());}
+ guard_dept(&s,&c,dept,"read").await?;
  let rows=sqlx::query("SELECT id,full_name,role FROM users WHERE active=true AND (department_id=$1 OR role IN ('director','admin')) ORDER BY full_name")
  .bind(dept).fetch_all(&s.db).await.map_err(db)?;
  Ok(Json(Value::Array(rows.iter().map(|r|json!({"id":r.get::<Uuid,_>("id"),"name":r.get::<String,_>("full_name"),"role":r.get::<String,_>("role")})).collect())))
@@ -619,7 +619,7 @@ async fn threads_list(State(s):State<App>,h:HeaderMap,Path(activity_id):Path<Uui
  let c=who(&s,&h)?;
  let dept:Uuid=sqlx::query_scalar("SELECT department_id FROM activities WHERE id=$1")
   .bind(activity_id).fetch_optional(&s.db).await.map_err(db)?.ok_or_else(||bad("Aktivnost ne postoji"))?;
- if !can_read(&c,dept){return Err(forbidden());}
+ guard_dept(&s,&c,dept,"read").await?;
  let supervisor=director(&c)||(c.role=="manager"&&c.department_id==Some(dept));
  let rows=sqlx::query("SELECT t.id,t.title,t.status,t.created_at,t.updated_at,u.full_name AS created_name, (SELECT COUNT(*) FROM activity_thread_messages m WHERE m.thread_id=t.id) AS message_count FROM activity_threads t JOIN users u ON u.id=t.created_by WHERE t.activity_id=$1 AND ($2 OR EXISTS(SELECT 1 FROM activity_thread_participants p WHERE p.thread_id=t.id AND p.user_id=$3)) ORDER BY t.updated_at DESC")
   .bind(activity_id).bind(supervisor).bind(c.sub).fetch_all(&s.db).await.map_err(db)?;
@@ -629,7 +629,7 @@ async fn threads_list(State(s):State<App>,h:HeaderMap,Path(activity_id):Path<Uui
 async fn thread_create(State(s):State<App>,h:HeaderMap,Path(activity_id):Path<Uuid>,Json(p):Json<StartThread>)->ResultApi<Json<Value>> {
  let c=who(&s,&h)?;
  let dept:Uuid=sqlx::query_scalar("SELECT department_id FROM activities WHERE id=$1").bind(activity_id).fetch_optional(&s.db).await.map_err(db)?.ok_or_else(||bad("Aktivnost ne postoji"))?;
- if !can_manage(&c,dept){return Err(forbidden());}
+ guard_dept(&s,&c,dept,"manage").await?;
  if p.title.trim().is_empty()||p.title.len()>250||p.participants.len()>30||p.message.as_ref().is_some_and(|m|m.len()>12000){return Err(bad("Nevaljan naziv, broj sudionika ili duljina poruke"));}
  let mut participants:HashSet<Uuid>=p.participants.into_iter().collect();participants.insert(c.sub);
  let count:i64=sqlx::query_scalar("SELECT COUNT(*) FROM users WHERE active=true AND id = ANY($1) AND (department_id=$2 OR role IN ('admin','director'))")
