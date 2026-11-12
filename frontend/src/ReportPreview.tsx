@@ -5,7 +5,7 @@ type DepartmentVersion={id:string;version:number;snapshot:{items:Array<{id:strin
 export type {DepartmentVersion};
 const stamp=(v:string)=>new Date(v).toLocaleString('hr-HR',{dateStyle:'medium',timeStyle:'short'});
 const progressLabels:Record<string,string>={in_progress:'U tijeku',completed:'Završeno',postponed:'Odgođeno',not_started:'Nije započeto'};
-function Items({items,kind}:{items:Array<{id:string;title:string;description?:string;content?:string;progress?:string}>;kind:'plan'|'report'}){
+function Items({items,kind}:{items:Array<{id:string;parent_id:string|null;title:string;description?:string;content?:string;progress?:string}>;kind:'plan'|'report'}){
  return <div className="report-items">{numberedActivities(items).map(({item,number,depth})=><article key={item.id} className={'report-item'+(depth>0?' report-item-child':'')} style={{marginLeft:Math.min(depth,5)*24} as CSSProperties}>
   <h4><span className="report-item-number">{number}</span> {item.title}</h4>
   {item.description?.trim()&&<p>{item.description}</p>}
