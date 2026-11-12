@@ -30,9 +30,6 @@ async fn who(s:&App,h:&HeaderMap)->ResultApi<Claims> {
  Ok(c)
 }
 fn org_admin(c:&Claims)->bool {matches!(c.role.as_str(),"admin"|"org_admin")}
-fn can_read(c:&Claims,dept:Uuid)->bool { matches!(c.role.as_str(),"manager"|"employee") && c.department_id==Some(dept) }
-fn can_write(c:&Claims,dept:Uuid)->bool { matches!(c.role.as_str(),"manager"|"employee") && c.department_id==Some(dept) }
-fn can_manage(c:&Claims,dept:Uuid)->bool {c.role=="manager"&&c.department_id==Some(dept)}
 fn director(c:&Claims)->bool {c.role=="director"&&c.sector_id.is_some()}
 async fn guard_dept(s:&App,c:&Claims,dept:Uuid,action:&str)->ResultApi<()> {
  if matches!(c.role.as_str(),"admin"|"org_admin"){return Err(forbidden());}
