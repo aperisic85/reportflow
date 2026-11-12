@@ -550,3 +550,40 @@ button:focus-visible,summary:focus-visible{outline:3px solid #e58d1a;outline-off
 .activity-edit-panel details p{font-size:12px;margin-top:9px;line-height:1.5}
 .report-reader .report-actual strong{color:#754111;font-weight:750}
 @media(max-width:650px){.carry-panel,.activity-edit-panel{padding:13px}.carry-actions>button,.activity-edit-actions>button{flex:1}}
+
+
+/* Organization console: restrained graphite / amber */
+.org-shell{display:flex;min-height:100vh;background:#f4f2ed;color:#27231f}
+.org-sidebar{width:220px;flex-shrink:0;background:#242321;color:#f7f0e5;padding:26px 16px;display:flex;flex-direction:column;gap:28px}
+.org-brand{display:grid;gap:5px;padding:0 12px}
+.org-brand strong{font-size:23px;letter-spacing:-.7px}
+.org-brand small{font-size:12px;color:#c5b9aa}
+.org-sidebar nav{display:grid;gap:6px}
+.org-sidebar nav button,.org-logout{border:0;color:#e9dfd2;text-align:left;background:transparent;padding:11px 14px;border-radius:7px;cursor:pointer}
+.org-sidebar nav button.active{background:#f0c451;color:#25211c;font-weight:750}
+.org-sidebar nav button:hover:not(.active),.org-logout:hover{background:#3e3933}
+.org-logout{margin-top:auto}
+.org-main{flex:1;min-width:0;max-width:1250px;padding:36px clamp(18px,4vw,52px)}
+.org-main header{margin-bottom:22px}
+.org-main header h1{font-size:26px;margin:0 0 7px}
+.org-main header p{color:#6d6256;font-size:13px;margin:0}
+.org-panel{max-width:1050px}
+.org-panel h2{margin:0;font-size:19px}
+.org-panel h3{font-size:16px;margin:26px 0 15px}
+.org-heading{display:flex;justify-content:space-between;align-items:center;gap:12px}
+.org-list{margin-top:20px;border-top:1px solid #e5dccc}
+.org-list>div{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:13px 4px;border-bottom:1px solid #e5dccc}
+.org-list>div span{display:grid;gap:5px}
+.org-list strong{font-size:14px;color:#2b231c}
+.org-list small{display:block;color:#70665c;font-size:12px;margin-top:4px}
+.org-list button{font-size:12px}
+.org-form,.org-edit{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px}
+.org-form button,.org-edit .org-actions{justify-self:start}
+.org-edit{border-top:1px solid #ded0c0;padding-top:18px;margin-top:25px;background:#fff9ef;border-radius:8px;padding:20px}
+.org-edit h3,.org-edit .org-actions{grid-column:1/-1;margin:0}
+.org-edit label,.org-form label{display:grid;gap:6px}
+.org-edit .org-check{display:flex;align-items:center;gap:8px}
+.org-edit .org-check input{width:auto}
+.org-actions{display:flex;gap:10px}
+.org-notice{font-size:13px;color:#356443}
+@media(max-width:760px){.org-shell{flex-direction:column}.org-sidebar{width:auto;padding:16px;gap:15px}.org-sidebar nav{display:flex;flex-wrap:wrap}.org-logout{margin:0}.org-main{padding:20px 12px}.org-form,.org-edit{grid-template-columns:1fr}.org-list>div{align-items:flex-start;flex-direction:column}.org-heading{align-items:start;flex-direction:column}}
