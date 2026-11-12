@@ -84,7 +84,7 @@ class NumberingTests(unittest.TestCase):
         text = "\\n".join(p.text for p in result.paragraphs)
         self.assertIn("RF-SP-2026-11-I-v2", text)
         self.assertIn("INTERNO ELEKTRONIČKI ODOBRENO", text)
-        self.assertIn("nije kvalificirani elektronički potpis", text)
+        self.assertIn("ne kvalificirani elektronički potpis", text)
         self.assertTrue(result.inline_shapes, "Verification QR image is missing")
 
     def test_approval_requires_complete_metadata(self):
