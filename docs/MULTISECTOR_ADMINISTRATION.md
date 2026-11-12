@@ -46,7 +46,7 @@ Nova migracija `backend/migrations/0004_multisector.sql`:
 ## API i zaštita podataka
 
 - Administracija: `GET/POST /api/sectors`, `GET/POST /api/departments`, `GET/POST /api/users`, `PATCH /api/users/{id}`.
-- Uređivanje korisnika: ime, uloga, sektor/odjel, aktivnost računa, opcionalna zamjena lozinke; korisničko ime ostaje stalno.
+- Uređivanje korisnika: korisničko ime, ime, uloga, sektor/odjel, aktivnost računa i opcionalna zamjena lozinke.
 - `/api/auth/me` i prijava vraćaju `sector_id` i ulogu.
 - Svaki autorizirani zahtjev čita aktualno stanje korisnika iz baze: deaktivacija ili izmjena uloge vrijedi odmah, bez čekanja isteka JWT-a.
 - Za sadržajne API-je provjerava se pripadnost odjelu/sektoru; direktor pristupa samo vlastitom sektoru.
