@@ -289,16 +289,17 @@ async fn search_activities(State(s):State<App>,h:HeaderMap,Query(p):Query<Activi
 }
 async fn activity_history(State(s):State<App>,h:HeaderMap,Path(id):Path<Uuid>)->ResultApi<Json<Value>> {
  let c=who(&s,&h).await?;
- let a=sqlx::query("SELECT a.id,a.department_id,d.name AS department_name,a.parent_id,a.title,a.description,a.type,a.status FROM activities a JOIN departments d ON d.id=a.department_id WHERE a.id=$1")
+ let a=sqlx::query("SELECT a.id,a.department_id,d.name AS department_name,a.parent_id,a.title,a.description,a.type,a.status,a.created_at,a.updated_at,ac.full_name AS created_by_name FROM activities a JOIN departments d ON d.id=a.department_id LEFT JOIN users ac ON ac.id=a.created_by WHERE a.id=$1")
   .bind(id).fetch_optional(&s.db).await.map_err(db)?
   .ok_or_else(||ErrApi(StatusCode::NOT_FOUND,"Aktivnost nije pronađena".into()))?;
  let dept:Uuid=a.get("department_id");
  guard_dept(&s,&c,dept,"read").await?;
  let rows=sqlx::query(r#"
- SELECT u.id,u.year,u.month,u.kind,u.content,u.progress,u.include_in_document,u.updated_at,
-        usr.full_name AS updated_by_name
+ SELECT u.id,u.year,u.month,u.kind,u.content,u.progress,u.include_in_document,u.created_at,u.updated_at,u.creation_time_estimated,
+        usr.full_name AS updated_by_name,uc.full_name AS created_by_name
  FROM activity_updates u
  LEFT JOIN users usr ON usr.id=u.updated_by
+ LEFT JOIN users uc ON uc.id=u.created_by
  WHERE u.activity_id=$1
  ORDER BY u.year DESC,u.month DESC,u.kind
  "#).bind(id).fetch_all(&s.db).await.map_err(db)?;
@@ -311,6 +312,9 @@ async fn activity_history(State(s):State<App>,h:HeaderMap,Path(id):Path<Uuid>)->
   "progress":r.get::<String,_>("progress"),
   "include_in_document":r.get::<bool,_>("include_in_document"),
   "updated_at":r.get::<chrono::DateTime<Utc>,_>("updated_at"),
+  "created_at":r.get::<chrono::DateTime<Utc>,_>("created_at"),
+  "creation_time_estimated":r.get::<bool,_>("creation_time_estimated"),
+  "created_by_name":r.get::<Option<String>,_>("created_by_name"),
   "updated_by_name":r.get::<Option<String>,_>("updated_by_name")
  })).collect();
  Ok(Json(json!({"activity":{
@@ -318,7 +322,7 @@ async fn activity_history(State(s):State<App>,h:HeaderMap,Path(id):Path<Uuid>)->
   "department_name":a.get::<String,_>("department_name"),
   "parent_id":a.get::<Option<Uuid>,_>("parent_id"),
   "title":a.get::<String,_>("title"),"description":a.get::<String,_>("description"),
-  "type":a.get::<String,_>("type"),"status":a.get::<String,_>("status")
+  "type":a.get::<String,_>("type"),"status":a.get::<String,_>("status"),"created_at":a.get::<chrono::DateTime<Utc>,_>("created_at"),"updated_at":a.get::<chrono::DateTime<Utc>,_>("updated_at"),"created_by_name":a.get::<Option<String>,_>("created_by_name")
  },"entries":entries})))
 }
 
