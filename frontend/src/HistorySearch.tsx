@@ -10,11 +10,11 @@ type SearchRow={
 };
 type HistoryEntry={
  id:string;year:number;month:number;kind:string;content:string;
- progress:string;updated_at:string;updated_by_name:string|null;
+ progress:string;updated_at:string;updated_by_name:string|null;created_at:string;created_by_name:string|null;creation_time_estimated:boolean;
  include_in_document:boolean;
 };
 type HistoryData={
- activity:{id:string;title:string;description:string;department_name:string;status:string};
+ activity:{id:string;title:string;description:string;department_name:string;status:string;created_at:string;updated_at:string;created_by_name:string|null};
  entries:HistoryEntry[];
 };
 const statuses:Record<string,string>={in_progress:'U tijeku',completed:'Završeno',postponed:'Odgođeno',not_started:'Nije započeto',paused:'Pauzirano',cancelled:'Otkazano'};
@@ -22,7 +22,7 @@ const kindLabel=(k:string)=>k==='plan'?'Plan':'Izvješće';
 const monthLabel=(month:number,year:number)=>new Date(year,month-1,1).toLocaleDateString('hr-HR',{month:'long',year:'numeric'});
 
 export default function HistorySearch({user,depts,initialActivityId}:{user:User;depts:Dept[];initialActivityId:string|null}){
- const sector=user.role==='admin'||user.role==='director';
+ const sector=user.role==='director';
  const [query,setQuery]=useState('');
  const [departmentId,setDepartmentId]=useState(sector?'':user.department_id??'');
  const [year,setYear]=useState('');
@@ -100,13 +100,14 @@ export default function HistorySearch({user,depts,initialActivityId}:{user:User;
     <button type="button" className="outline" onClick={()=>setHistory(null)}>Zatvori</button></div>
    {history.activity.description&&<p><strong>Opis iz registra:</strong> {history.activity.description}</p>}
    <p><strong>Trenutni status:</strong> {statuses[history.activity.status]??history.activity.status}</p>
+   <p className="rf-history-date">Kreirano: {new Date(history.activity.created_at).toLocaleString('hr-HR',{dateStyle:'short',timeStyle:'medium'})}{history.activity.created_by_name?' · '+history.activity.created_by_name:''} · Zadnja izmjena: {new Date(history.activity.updated_at).toLocaleString('hr-HR',{dateStyle:'short',timeStyle:'medium'})}</p>
    {history.entries.length===0?<p>Nema spremljenih mjesečnih zapisa. Aktivnost postoji samo u registru.</p>:
     <div className="history-timeline">{history.entries.map(entry=><article key={entry.id} className="history-entry">
      <div><strong>{monthLabel(entry.month,entry.year)}</strong> · {kindLabel(entry.kind)}
       <span className="chip">{statuses[entry.progress]??entry.progress}</span></div>
      <p>{entry.content||'Nije unesen opis za ovaj mjesec.'}</p>
-     <small>{entry.updated_by_name?'Unio/la: '+entry.updated_by_name+' · ':''}
-       Ažurirano: {new Date(entry.updated_at).toLocaleString('hr-HR')}
+     <small>Kreirano: {new Date(entry.created_at).toLocaleString('hr-HR',{dateStyle:'short',timeStyle:'medium'})}{entry.created_by_name?' · '+entry.created_by_name:''}{entry.creation_time_estimated?' (povijesna procjena)':''}
+       <br/>Izmijenjeno: {new Date(entry.updated_at).toLocaleString('hr-HR',{dateStyle:'short',timeStyle:'medium'})}{entry.updated_by_name?' · '+entry.updated_by_name:''}
        {!entry.include_in_document?' · Nije uključeno u dokument':''}</small>
     </article>)}</div>}
   </section>}
