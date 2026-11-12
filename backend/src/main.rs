@@ -221,8 +221,8 @@ async fn dashboard(State(s):State<App>,h:HeaderMap,Query(p):Query<DashboardFilte
 #[derive(Deserialize)] struct FilterDept {department_id:Uuid}
 async fn activities(State(s):State<App>,h:HeaderMap,Query(p):Query<FilterDept>)->ResultApi<Json<Value>> {
  let c=who(&s,&h).await?; guard_dept(&s,&c,p.department_id,"read").await?;
- let rows=sqlx::query("SELECT id,department_id,parent_id,title,description,type,status,sort_order,created_by,created_at,updated_at FROM activities WHERE department_id=$1 ORDER BY sort_order,created_at").bind(p.department_id).fetch_all(&s.db).await.map_err(db)?;
- Ok(Json(Value::Array(rows.iter().map(|r|json!({"id":r.get::<Uuid,_>("id"),"department_id":r.get::<Uuid,_>("department_id"),"parent_id":r.get::<Option<Uuid>,_>("parent_id"),"title":r.get::<String,_>("title"),"description":r.get::<String,_>("description"),"type":r.get::<String,_>("type"),"status":r.get::<String,_>("status"),"sort_order":r.get::<i32,_>("sort_order"),"created_by":r.get::<Option<Uuid>,_>("created_by"),"created_at":r.get::<chrono::DateTime<Utc>,_>("created_at"),"updated_at":r.get::<chrono::DateTime<Utc>,_>("updated_at")})).collect())))
+ let rows=sqlx::query("SELECT a.id,a.department_id,a.parent_id,a.title,a.description,a.type,a.status,a.sort_order,a.created_by,a.created_at,a.updated_at,u.full_name AS created_by_name FROM activities a LEFT JOIN users u ON u.id=a.created_by WHERE a.department_id=$1 ORDER BY sort_order,created_at").bind(p.department_id).fetch_all(&s.db).await.map_err(db)?;
+ Ok(Json(Value::Array(rows.iter().map(|r|json!({"id":r.get::<Uuid,_>("id"),"department_id":r.get::<Uuid,_>("department_id"),"parent_id":r.get::<Option<Uuid>,_>("parent_id"),"title":r.get::<String,_>("title"),"description":r.get::<String,_>("description"),"type":r.get::<String,_>("type"),"status":r.get::<String,_>("status"),"sort_order":r.get::<i32,_>("sort_order"),"created_by":r.get::<Option<Uuid>,_>("created_by"),"created_by_name":r.get::<Option<String>,_>("created_by_name"),"created_at":r.get::<chrono::DateTime<Utc>,_>("created_at"),"updated_at":r.get::<chrono::DateTime<Utc>,_>("updated_at")})).collect())))
 }
 #[derive(Deserialize)]
 struct ActivitySearchFilter {
@@ -726,8 +726,8 @@ async fn sector_freshness(State(s):State<App>,h:HeaderMap,Query(p):Query<SectorF
 #[derive(Deserialize)] struct SectorFilter {year:i32,month:i32,kind:String}
 async fn sector_docs(State(s):State<App>,h:HeaderMap,Query(p):Query<SectorFilter>)->ResultApi<Json<Value>> {
  let c=who(&s,&h).await?; if !director(&c) {return Err(forbidden());} check_period(p.year,p.month,&p.kind)?;
- let rows=sqlx::query("SELECT id,title,status,revision,created_at,snapshot,introduction,conclusion FROM sector_documents WHERE year=$1 AND month=$2 AND kind=$3 AND sector_id=$4 ORDER BY revision DESC").bind(p.year).bind(p.month).bind(p.kind).bind(c.sector_id.ok_or_else(forbidden)?).fetch_all(&s.db).await.map_err(db)?;
- Ok(Json(Value::Array(rows.iter().map(|r|json!({"id":r.get::<Uuid,_>("id"),"title":r.get::<String,_>("title"),"status":r.get::<String,_>("status"),"revision":r.get::<i32,_>("revision"),"created_at":r.get::<chrono::DateTime<Utc>,_>("created_at"),"snapshot":r.get::<Value,_>("snapshot"),"introduction":r.get::<String,_>("introduction"),"conclusion":r.get::<String,_>("conclusion")})).collect())))
+ let rows=sqlx::query("SELECT d.id,d.title,d.status,d.revision,d.created_at,d.snapshot,d.introduction,d.conclusion,u.full_name AS created_by_name FROM sector_documents d LEFT JOIN users u ON u.id=d.created_by WHERE d.year=$1 AND month=$2 AND kind=$3 AND d.sector_id=$4 ORDER BY d.revision DESC").bind(p.year).bind(p.month).bind(p.kind).bind(c.sector_id.ok_or_else(forbidden)?).fetch_all(&s.db).await.map_err(db)?;
+ Ok(Json(Value::Array(rows.iter().map(|r|json!({"id":r.get::<Uuid,_>("id"),"title":r.get::<String,_>("title"),"status":r.get::<String,_>("status"),"revision":r.get::<i32,_>("revision"),"created_at":r.get::<chrono::DateTime<Utc>,_>("created_at"),"created_by_name":r.get::<Option<String>,_>("created_by_name"),"snapshot":r.get::<Value,_>("snapshot"),"introduction":r.get::<String,_>("introduction"),"conclusion":r.get::<String,_>("conclusion")})).collect())))
 }
 #[derive(Deserialize)] struct BuildSector {year:i32,month:i32,kind:String,department_ids:Vec<Uuid>,introduction:Option<String>,conclusion:Option<String>}
 async fn build_sector(State(s):State<App>,h:HeaderMap,Json(p):Json<BuildSector>)->ResultApi<Json<Value>> {
@@ -740,13 +740,15 @@ async fn build_sector(State(s):State<App>,h:HeaderMap,Json(p):Json<BuildSector>)
   if accepted.as_deref()!=Some("submitted") {return Err(bad(format!("Odjel {} još nije predao dokument",d.get::<String,_>("name"))));}
   // A director must consume the submitted immutable snapshot, NOT live activities.
   // This prevents subsequent edits from silently changing an accepted report.
-  let version_row=sqlx::query("SELECT v.version,v.snapshot FROM department_document_versions v JOIN department_documents dd ON dd.id=v.department_document_id WHERE dd.department_id=$1 AND dd.year=$2 AND dd.month=$3 AND dd.kind=$4 ORDER BY v.version DESC LIMIT 1")
+  let version_row=sqlx::query("SELECT v.version,v.snapshot,v.submitted_at,u.full_name AS submitted_by_name FROM department_document_versions v JOIN users u ON u.id=v.submitted_by JOIN department_documents dd ON dd.id=v.department_document_id WHERE dd.department_id=$1 AND dd.year=$2 AND dd.month=$3 AND dd.kind=$4 ORDER BY v.version DESC LIMIT 1")
    .bind(dept_id).bind(p.year).bind(p.month).bind(&p.kind).fetch_optional(&s.db).await.map_err(db)?.ok_or_else(||bad("Odjel nema spremljenu predanu verziju"))?;
   let source_version:i32=version_row.get("version");
   let immutable:Value=version_row.get("snapshot");
+  let source_submitted_at:chrono::DateTime<Utc>=version_row.get("submitted_at");
+  let source_submitted_by:String=version_row.get("submitted_by_name");
   let items=immutable.get("items").and_then(Value::as_array).ok_or_else(||bad("Predana verzija nema popis aktivnosti"))?;
   if items.is_empty(){return Err(bad("Predana verzija odjela nema aktivnosti"));}
-  sections.push(json!({"department_id":dept_id,"code":d.get::<String,_>("code"),"name":d.get::<String,_>("name"),"source_version":source_version,"items":items}));
+  sections.push(json!({"department_id":dept_id,"code":d.get::<String,_>("code"),"name":d.get::<String,_>("name"),"source_version":source_version,"source_submitted_at":source_submitted_at,"source_submitted_by":source_submitted_by,"items":items}));
  }
  let title=format!("{} značajnijih aktivnosti za {:02}.{}.",if p.kind=="plan" {"PLAN"}else{"IZVJEŠĆE"},p.month,p.year);
  let snapshot=json!({"year":p.year,"month":p.month,"kind":p.kind,"title":title,"sections":sections});
