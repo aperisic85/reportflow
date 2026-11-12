@@ -33,10 +33,12 @@ export default function MonthlyEntry({item,initial,planReference,kind,disabled,b
     {expanded?<ChevronDown size={18}/>:<ChevronRight size={18}/>}
     <span className="monthly-card-heading"><strong>{item.title}</strong></span>
    </button>
-   <div className="monthly-card-flags"><span className={changed?'monthly-unsaved':'monthly-state'}>{changed?'Nije spremljeno':saved?'Spremljeno':'Bez unosa'}</span>{initial?.updated_at&&<time className="monthly-timestamp" dateTime={initial.updated_at}>{new Date(initial.updated_at).toLocaleString('hr-HR')}</time>}</div>
+   <div className="monthly-card-flags"><span className={changed?'monthly-unsaved':'monthly-state'}>{changed?'Nije spremljeno':saved?'Spremljeno':'Bez unosa'}</span>{initial?.updated_at&&<time className="monthly-timestamp" dateTime={initial.updated_at} title={'Izmijenjeno: '+(initial.updated_by_name??'Korisnik nije poznat')}>Izmjena: {new Date(initial.updated_at).toLocaleString('hr-HR',{dateStyle:'short',timeStyle:'medium'})}</time>}</div>
   </div>
   {expanded&&<div className="monthly-card-body">
    {item.description.trim()&&<details className="monthly-context"><summary>Opis aktivnosti</summary><p>{item.description}</p></details>}
+   {initial?.created_at&&<p className="rf-entry-created">Kreirano: {new Date(initial.created_at).toLocaleString('hr-HR',{dateStyle:'short',timeStyle:'medium'})}{initial.created_by_name?' · '+initial.created_by_name:''}{initial.creation_time_estimated?' · procjena za stari zapis':''}</p>}
+   {initial?.updated_at&&<p className="rf-entry-created">Zadnja izmjena: {new Date(initial.updated_at).toLocaleString('hr-HR',{dateStyle:'short',timeStyle:'medium'})}{initial.updated_by_name?' · '+initial.updated_by_name:''}</p>}
    {kind==='report'&&<details className="monthly-context"><summary>Plan za ovaj mjesec</summary>
     <p>{planReference?.trim()||'Nema unesenog plana za ovu aktivnost.'}</p>
    </details>}
