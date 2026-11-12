@@ -25,3 +25,14 @@ BEGIN
 END $$;
 CREATE TRIGGER approvals_immutable_update BEFORE UPDATE OR DELETE ON sector_document_approvals
  FOR EACH ROW EXECUTE FUNCTION prevent_approval_mutation();
+
+-- Also protect an approved document revision itself against later direct edits.
+CREATE OR REPLACE FUNCTION prevent_approved_sector_revision_mutation() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+ IF OLD.status='approved' THEN
+  RAISE EXCEPTION 'Approved sector document revisions cannot be modified or deleted';
+ END IF;
+ RETURN NEW;
+END $$;
+CREATE TRIGGER sector_revision_approved_immutable BEFORE UPDATE OR DELETE ON sector_documents
+ FOR EACH ROW EXECUTE FUNCTION prevent_approved_sector_revision_mutation();
