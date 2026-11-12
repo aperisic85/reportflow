@@ -144,19 +144,19 @@ async fn users(State(s):State<App>,h:HeaderMap)->ResultApi<Json<Value>> {
   "created_at":r.get::<chrono::DateTime<Utc>,_>("created_at")
  })).collect())))
 }
-#[derive(Deserialize)] struct UpdateUser {full_name:String,role:String,sector_id:Option<Uuid>,department_id:Option<Uuid>,active:bool,password:Option<String>}
+#[derive(Deserialize)] struct UpdateUser {username:String,full_name:String,role:String,sector_id:Option<Uuid>,department_id:Option<Uuid>,active:bool,password:Option<String>}
 async fn update_user(State(s):State<App>,h:HeaderMap,Path(id):Path<Uuid>,Json(p):Json<UpdateUser>)->ResultApi<Json<Value>> {
  let c=who(&s,&h).await?;if !org_admin(&c){return Err(forbidden());}
  let previous=sqlx::query("SELECT role,active FROM users WHERE id=$1").bind(id).fetch_optional(&s.db).await.map_err(db)?.ok_or_else(||bad("Korisnik ne postoji"))?;
  let old_role:String=previous.get("role");
  if (p.role=="admin"||old_role=="admin")&&c.role!="admin"{return Err(forbidden());}
  if id==c.sub&&(p.role!=c.role||!p.active){return Err(bad("Ne možeš sebi ukloniti administratorsku ulogu ili deaktivirati račun"));}
- if p.full_name.trim().is_empty(){return Err(bad("Ime je obvezno"));}
+ if p.full_name.trim().is_empty()||p.username.trim().is_empty()||p.username.trim().len()>100{return Err(bad("Korisničko ime i ime su obvezni"));}
  if let Some(pass)=&p.password {if !pass.is_empty()&&pass.len()<10{return Err(bad("Nova lozinka mora imati najmanje 10 znakova"));}}
  validate_target_user(&s,&p.role,p.sector_id,p.department_id).await?;
  let pwd=match p.password.as_deref(){Some(value) if !value.is_empty()=>Some(hash(value)?),_=>None};
- sqlx::query("UPDATE users SET full_name=$2,role=$3,sector_id=$4,department_id=$5,active=$6,password_hash=COALESCE($7,password_hash) WHERE id=$1")
-  .bind(id).bind(p.full_name.trim()).bind(&p.role).bind(p.sector_id).bind(p.department_id).bind(p.active).bind(pwd)
+ sqlx::query("UPDATE users SET full_name=$2,role=$3,sector_id=$4,department_id=$5,active=$6,password_hash=COALESCE($7,password_hash),username=$8 WHERE id=$1")
+  .bind(id).bind(p.full_name.trim()).bind(&p.role).bind(p.sector_id).bind(p.department_id).bind(p.active).bind(pwd).bind(p.username.trim())
   .execute(&s.db).await.map_err(db)?;
  audit(&s,&c,"user.update",Some(id)).await;Ok(Json(json!({"ok":true})))
 }
