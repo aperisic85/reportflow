@@ -870,7 +870,7 @@ async fn approve_sector(State(s):State<App>,h:HeaderMap,Path(id):Path<Uuid>,Json
  let digest=format!("{:x}",Sha256::digest(&bytes));
  sqlx::query("INSERT INTO sector_document_approvals(sector_document_id,verification_token,document_number,approved_by,approved_at,pdf_sha256,pdf_bytes,pdf_size) VALUES($1,$2,$3,$4,$5,$6,$7,$8)")
   .bind(id).bind(token).bind(&number).bind(c.sub).bind(approved_at).bind(&digest)
-  .bind(bytes.as_ref()).bind(bytes.len() as i64).execute(&mut *tx).await.map_err(db)?;
+  .bind(bytes.to_vec()).bind(bytes.len() as i64).execute(&mut *tx).await.map_err(db)?;
  let count=sqlx::query("UPDATE sector_documents SET status='approved',locked_at=$2 WHERE id=$1 AND status='draft'")
   .bind(id).bind(approved_at).execute(&mut *tx).await.map_err(db)?.rows_affected();
  if count!=1{return Err(bad("Dokument više nije nacrt"));}
