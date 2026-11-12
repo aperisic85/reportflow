@@ -19,6 +19,8 @@ ALTER TABLE users ADD COLUMN sector_id UUID REFERENCES sectors(id);
 UPDATE users SET sector_id=(SELECT d.sector_id FROM departments d WHERE d.id=users.department_id)
  WHERE department_id IS NOT NULL;
 UPDATE users SET sector_id=(SELECT id FROM sectors WHERE code='SP') WHERE role='director' AND sector_id IS NULL;
+UPDATE users SET department_id=NULL,sector_id=NULL WHERE role='admin';
+UPDATE users SET department_id=NULL WHERE role='director';
 CREATE INDEX users_sector_idx ON users(sector_id);
 
 ALTER TABLE sector_documents ADD COLUMN sector_id UUID REFERENCES sectors(id);
