@@ -6,6 +6,8 @@ import './style.css';
 import HistorySearch from './HistorySearch';
 import Dashboard from './Dashboard';
 import ActivityConversation from './ActivityConversation';
+import CarryPlanner from './CarryPlanner';
+import ActivityDetailsEditor from './ActivityDetailsEditor';
 import Inbox from './Inbox';
 import {DepartmentReportPreview,SectorReportPreview,type DepartmentVersion} from './ReportPreview';
 import MonthlyEntry from './MonthlyEntry';
@@ -42,6 +44,7 @@ function App(){
  const [entrySearch,setEntrySearch]=useState(''),[entryFilter,setEntryFilter]=useState('all');
  const [registrySearch,setRegistrySearch]=useState(''),[registryDetails,setRegistryDetails]=useState<string[]>([]);
  const [showNewActivity,setShowNewActivity]=useState(false);
+ const [editActivityId,setEditActivityId]=useState<string|null>(null);
  const [chatActivityId,setChatActivityId]=useState<string|null>(null),[chatThreadId,setChatThreadId]=useState<string|null>(null);
  const [inboxUnread,setInboxUnread]=useState(0);
  const [versions,setVersions]=useState<DepartmentVersion[]>([]),[selectedVersion,setSelectedVersion]=useState<DepartmentVersion|null>(null);
@@ -75,6 +78,8 @@ function App(){
  const canSubmit=user.role==='admin'||(user.department_id===dept&&user.role==='manager');
  const isDirector=user.role==='admin'||user.role==='director';
  const selectedDept=depts.find(d=>d.id===dept);
+ const currentCalendar=new Date();
+ const futureReport=kind==='report'&&(year>currentCalendar.getFullYear()||(year===currentCalendar.getFullYear()&&month>currentCalendar.getMonth()+1));
  const dataByActivity=Object.fromEntries(updates.map(u=>[u.activity_id,u]));
  const normalizedEntrySearch=entrySearch.trim().toLocaleLowerCase('hr');
  const visibleEntries=treeOrder(activities).filter(a=>{
@@ -94,7 +99,6 @@ function App(){
  async function saveUpdate(activityId:string,content:string,progress:string,include:boolean){await post('/updates',{activity_id:activityId,year,month,kind,content,progress,include_in_document:include});await refresh();}
  async function saveUser(){await post('/users',{...newUser,department_id:newUser.department_id||null});setNewUser({username:'',full_name:'',password:'',role:'employee',department_id:''});await refresh();}
  async function build(){await post('/sector-documents',{year,month,kind,department_ids:chosen,introduction:intro,conclusion});setSelectedDraft(null);await refresh();}
- async function carry(){const r=await post<{created:number;source_month:number;source_year:number}>('/updates/carry-forward',{department_id:dept,year,month,kind});await refresh();return `Preneseno ${r.created} nedovršenih stavki iz ${r.source_month}/${r.source_year}. Prethodni mjesečni opisi nisu kopirani.`;}
  async function moveParent(id:string,parent_id:string|null){await post(`/activities/${id}/move`,{parent_id});await refresh();}
  async function moveOrder(id:string,delta:number){await post('/activities/reorder',{department_id:dept,ordered_ids:siblingMove(activities,id,delta)});await refresh();}
  async function saveSectorDraft(snapshot:SectorSnapshot,introduction:string,conclusion:string){if(!selectedDraft)return;await patch(`/sector-documents/${selectedDraft.id}`,{snapshot,introduction,conclusion});setSelectedDraft(null);await refresh();}
@@ -127,7 +131,7 @@ function App(){
       <option value="all">Sve aktivnosti</option><option value="missing">Bez mjesečnog unosa</option><option value="saved">Sa spremljenim unosom</option>
      </select></label>
     </div>
-    {kind==='report'&&canSubmit&&<details className="simple-options"><summary>Dodatne radnje</summary><p>Možeš prenijeti nedovršene aktivnosti iz prošlog mjeseca bez prepisivanja njihovih opisa.</p><button className="outline" disabled={loading||docStatus==='submitted'} onClick={()=>notify(carry)}>Prenesi nedovršene</button></details>}
+    {kind==='plan'&&<CarryPlanner departmentId={dept} year={year} month={month} canCarry={canSubmit&&docStatus!=='submitted'} onApplied={refresh}/>}
     {activities.length===0?<Empty text="Nema aktivnosti. Prvo dodaj aktivnost u Registru aktivnosti."/>:
      visibleEntries.length===0?<Empty text="Nema aktivnosti koje odgovaraju filtrima."/>:
      <div className="ux-entry-list">{visibleEntries.map(a=><MonthlyEntry
@@ -162,11 +166,13 @@ function App(){
       <div className="ux-registry-actions">
        <span className="simple-registry-status">{statusNames[a.status]}</span>
        <button type="button" className="outline compact" onClick={()=>{setChatActivityId(a.id);setChatThreadId(null);}}><MessageCircle size={14}/> Chat</button>
+       {canSubmit&&<button type="button" className="outline compact" onClick={()=>setEditActivityId(id=>id===a.id?null:a.id)}>Uredi</button>}
        <button type="button" className="outline compact" onClick={()=>toggleRegistryDetails(a.id)}>{registryDetails.includes(a.id)?'Sakrij detalje':'Detalji'}</button>
        <button type="button" className="outline compact" onClick={()=>{setHistoryActivityId(a.id);setTab('history');}}>Povijest</button>
       </div></div>
       {chatActivityId===a.id&&<ActivityConversation key={a.id+'-'+(chatThreadId??'')} activityId={a.id} canManage={canSubmit} openThread={chatThreadId} onClose={()=>{setChatActivityId(null);setChatThreadId(null);void api<Array<{unread:number}>>('/inbox').then(x=>setInboxUnread(x.reduce((n,i)=>n+i.unread,0))).catch(()=>{});}}/>}
       {a.description&&registryDetails.includes(a.id)&&<p className="ux-registry-description">{a.description}</p>}
+      {editActivityId===a.id&&canSubmit&&<ActivityDetailsEditor key={a.id} activity={a} onSaved={refresh} onCancel={()=>setEditActivityId(null)}/>}
       {registryDetails.includes(a.id)&&<div className="ux-registry-details">
        {canSubmit&&<label>Nadređena aktivnost<select value={a.parent_id||''} disabled={loading} onChange={e=>notify(()=>moveParent(a.id,e.target.value||null))}>
         <option value="">Bez nadređene aktivnosti</option>
@@ -179,7 +185,7 @@ function App(){
       </div>}
      </article>)}</div>}
    </section></>}
-   {tab==='department'&&<section className="panel"><div className="panel-head"><div><h2>{kind==='plan'?'Plan':'Izvješće'} odjela</h2><p>Predajom se zaključava uređivanje mjesečnih zapisa dok voditelj ne vrati dokument u nacrt.</p></div><span className={'chip '+(docStatus==='submitted'?'green':'amber')}>{docStatus==='submitted'?'Predano':'Nacrt'}</span></div><div className="summary"><div><strong>{activities.length}</strong><small>Aktivnosti u registru</small></div><div><strong>{updates.length}</strong><small>Mjesečnih zapisa</small></div><div><strong>{includedActivities.length}</strong><small>U dokumentu</small></div></div><h3>Pregled sadržaja</h3>{includedActivities.length?includedActivities.map(a=><div className="activity-row" key={a.id}><div><strong>{a.parent_id?'↳ ':''}{a.title}</strong>{previewContent(a).description&&<p>{previewContent(a).description}</p>}{previewContent(a).monthly&&<p><strong>{kind==='plan'?'Mjesečni plan:':'Mjesečna realizacija:'}</strong> {previewContent(a).monthly}</p>}</div></div>):<Empty text="Nema aktivnosti uključenih u dokument. Dodajte aktivnost ili označite 'U dokument'."/>}{canSubmit&&<div className="actions"><button className="primary" disabled={loading||(docStatus!=='submitted'&&includedActivities.length===0)} onClick={()=>notify(async()=>{await post('/department-documents',{department_id:dept,year,month,kind,status:docStatus==='submitted'?'draft':'submitted'});await refresh();})}>{docStatus==='submitted'?'Vrati u nacrt':kind==='plan'?'Predaj plan odjela':'Predaj izvješće odjela'}</button></div>}<div className="report-version-history">
+   {tab==='department'&&<section className="panel"><div className="panel-head"><div><h2>{kind==='plan'?'Plan':'Izvješće'} odjela</h2><p>Predajom se zaključava uređivanje mjesečnih zapisa dok voditelj ne vrati dokument u nacrt.</p></div><span className={'chip '+(docStatus==='submitted'?'green':'amber')}>{docStatus==='submitted'?'Predano':'Nacrt'}</span></div><div className="summary"><div><strong>{activities.length}</strong><small>Aktivnosti u registru</small></div><div><strong>{updates.length}</strong><small>Mjesečnih zapisa</small></div><div><strong>{includedActivities.length}</strong><small>U dokumentu</small></div></div><h3>Pregled sadržaja</h3>{includedActivities.length?includedActivities.map(a=><div className="activity-row" key={a.id}><div><strong>{a.parent_id?'↳ ':''}{a.title}</strong>{previewContent(a).description&&<p>{previewContent(a).description}</p>}{previewContent(a).monthly&&<p><strong>{kind==='plan'?'Mjesečni plan:':'Mjesečna realizacija:'}</strong> {previewContent(a).monthly}</p>}</div></div>):<Empty text="Nema aktivnosti uključenih u dokument. Dodajte aktivnost ili označite 'U dokument'."/>}{futureReport&&<p className="simple-guidance">Izvješće za budući mjesec možeš pripremati kao nacrt, ali predaja je dopuštena tek od početka tog mjeseca.</p>}{canSubmit&&<div className="actions"><button className="primary" disabled={loading||(docStatus!=='submitted'&&(includedActivities.length===0||futureReport))} onClick={()=>notify(async()=>{await post('/department-documents',{department_id:dept,year,month,kind,status:docStatus==='submitted'?'draft':'submitted'});await refresh();})}>{docStatus==='submitted'?'Vrati u nacrt':kind==='plan'?'Predaj plan odjela':'Predaj izvješće odjela'}</button></div>}<div className="report-version-history">
   <h3>Predane verzije</h3>
   {versions.length===0?<p>Još nema predanih verzija.</p>:versions.map(v=><div className="report-version-row" key={v.id}>
    <span>Verzija {v.version} · {v.author} · {new Date(v.submitted_at).toLocaleString('hr-HR')}</span>

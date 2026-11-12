@@ -527,3 +527,26 @@ button:focus-visible,summary:focus-visible{outline:3px solid #e58d1a;outline-off
 
 .monthly-timestamp{display:block;color:#75685b;font-size:11px;font-variant-numeric:tabular-nums}
 .ux-registry-actions .outline svg{vertical-align:middle}
+
+
+/* Minimal work planning and activity editing */
+.carry-planner{margin:12px 0 20px}
+.carry-notice{color:#3d6644;font-size:13px;margin:9px 0}
+.carry-panel{padding:17px 20px;margin-top:12px;border:1px solid #d9c2a3;background:#fff9ee;border-radius:8px}
+.carry-panel h3{margin:0 0 6px;font-size:16px;color:#31261b}
+.carry-panel>p{font-size:13px;line-height:1.5;color:#66584b}
+.carry-options{margin:15px 0;max-height:320px;overflow:auto;border-top:1px solid #ebddca}
+.carry-options label{padding:12px 0;display:flex;gap:12px;align-items:flex-start;border-bottom:1px solid #ebddca}
+.carry-options label input{width:auto;margin:4px 0 0;accent-color:#d85e08}
+.carry-options label>span{display:flex;flex-direction:column;gap:4px}
+.carry-options label small{font-size:11px;color:#806e5c}
+.carry-options label.carry-existing{opacity:.6}
+.carry-actions,.activity-edit-actions{display:flex;gap:10px;flex-wrap:wrap;margin-top:12px}
+.activity-edit-panel{padding:17px 19px;margin:12px 0 16px;background:#fff8ed;border:1px solid #dbbd91;border-radius:8px}
+.activity-edit-panel h4{margin:0 0 12px}
+.activity-edit-panel label{margin:12px 0;display:block}
+.activity-edit-panel details{margin-top:20px;border-top:1px solid #e2d3bd;padding-top:12px;font-size:12px}
+.activity-edit-panel summary{cursor:pointer;color:#9c4a12;font-weight:600}
+.activity-edit-panel details p{font-size:12px;margin-top:9px;line-height:1.5}
+.report-reader .report-actual strong{color:#754111;font-weight:750}
+@media(max-width:650px){.carry-panel,.activity-edit-panel{padding:13px}.carry-actions>button,.activity-edit-actions>button{flex:1}}

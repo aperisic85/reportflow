@@ -237,13 +237,60 @@ async fn create_activity(State(s):State<App>,h:HeaderMap,Json(p):Json<NewActivit
 #[derive(Deserialize)] struct EditActivity {title:String,description:String,status:String,sort_order:i32}
 async fn edit_activity(State(s):State<App>,h:HeaderMap,Path(id):Path<Uuid>,Json(p):Json<EditActivity>)->ResultApi<Json<Value>> {
  let c=who(&s,&h)?;
- let row=sqlx::query("SELECT department_id,created_by FROM activities WHERE id=$1").bind(id).fetch_optional(&s.db).await.map_err(db)?.ok_or_else(||bad("Aktivnost ne postoji"))?;
- let dept:Uuid=row.get("department_id"); let owner:Option<Uuid>=row.get("created_by");
- if !can_write(&c,dept) || (c.role=="employee" && owner!=Some(c.sub)) {return Err(forbidden());}
- if !["in_progress","completed","paused","cancelled"].contains(&p.status.as_str()) {return Err(bad("Nevaljan status"));}
- sqlx::query("UPDATE activities SET title=$2,description=$3,status=$4,sort_order=$5,updated_at=now() WHERE id=$1").bind(id).bind(p.title).bind(p.description).bind(p.status).bind(p.sort_order).execute(&s.db).await.map_err(db)?;
- audit(&s,&c,"activity.update",Some(id)).await; Ok(Json(json!({"ok":true})))
+ if p.title.trim().is_empty()||p.title.len()>1000||p.description.len()>12000 {return Err(bad("Nevaljan naslov ili opis"));}
+ if !["in_progress","completed","paused","cancelled"].contains(&p.status.as_str()){return Err(bad("Nevaljan status"));}
+ let mut tx=s.db.begin().await.map_err(db)?;
+ let row=sqlx::query("SELECT department_id,created_by,title,description FROM activities WHERE id=$1 FOR UPDATE")
+  .bind(id).fetch_optional(&mut *tx).await.map_err(db)?.ok_or_else(||bad("Aktivnost ne postoji"))?;
+ let dept:Uuid=row.get("department_id");let owner:Option<Uuid>=row.get("created_by");
+ if !can_write(&c,dept)||(c.role=="employee"&&owner!=Some(c.sub)){return Err(forbidden());}
+ let old_title:String=row.get("title");let old_description:String=row.get("description");
+ if old_title!=p.title||old_description!=p.description {
+  sqlx::query("INSERT INTO activity_field_changes(activity_id,changed_by,old_title,new_title,old_description,new_description) VALUES($1,$2,$3,$4,$5,$6)")
+   .bind(id).bind(c.sub).bind(&old_title).bind(&p.title).bind(&old_description).bind(&p.description).execute(&mut *tx).await.map_err(db)?;
+ }
+ sqlx::query("UPDATE activities SET title=$2,description=$3,status=$4,sort_order=$5,updated_at=now() WHERE id=$1")
+  .bind(id).bind(&p.title).bind(&p.description).bind(&p.status).bind(p.sort_order).execute(&mut *tx).await.map_err(db)?;
+ tx.commit().await.map_err(db)?;
+ audit(&s,&c,"activity.update",Some(id)).await;Ok(Json(json!({"ok":true})))
 }
+#[derive(Deserialize)] struct RenameActivity {title:String,description:String}
+async fn rename_activity(State(s):State<App>,h:HeaderMap,Path(id):Path<Uuid>,Json(p):Json<RenameActivity>)->ResultApi<Json<Value>> {
+ let c=who(&s,&h)?;
+ if p.title.trim().is_empty() || p.title.len()>1000 || p.description.len()>12000 {
+  return Err(bad("Naziv je obavezan i mora biti kraći od 1000 znakova, opis od 12000 znakova"));
+ }
+ let mut tx=s.db.begin().await.map_err(db)?;
+ let row=sqlx::query("SELECT department_id,title,description FROM activities WHERE id=$1 FOR UPDATE")
+  .bind(id).fetch_optional(&mut *tx).await.map_err(db)?.ok_or_else(||bad("Aktivnost ne postoji"))?;
+ let dept:Uuid=row.get("department_id");
+ if !can_manage(&c,dept){return Err(forbidden());}
+ let old_title:String=row.get("title");let old_description:String=row.get("description");
+ let new_title=p.title.trim();
+ if old_title!=new_title || old_description!=p.description {
+  sqlx::query("UPDATE activities SET title=$2,description=$3,updated_at=now() WHERE id=$1")
+   .bind(id).bind(new_title).bind(&p.description).execute(&mut *tx).await.map_err(db)?;
+  sqlx::query("INSERT INTO activity_field_changes(activity_id,changed_by,old_title,new_title,old_description,new_description) VALUES($1,$2,$3,$4,$5,$6)")
+   .bind(id).bind(c.sub).bind(old_title).bind(new_title).bind(old_description).bind(&p.description).execute(&mut *tx).await.map_err(db)?;
+ }
+ tx.commit().await.map_err(db)?;
+ audit(&s,&c,"activity.rename",Some(id)).await;
+ Ok(Json(json!({"ok":true})))
+}
+async fn activity_field_history(State(s):State<App>,h:HeaderMap,Path(id):Path<Uuid>)->ResultApi<Json<Value>> {
+ let c=who(&s,&h)?;
+ let dept:Uuid=sqlx::query_scalar("SELECT department_id FROM activities WHERE id=$1")
+ .bind(id).fetch_optional(&s.db).await.map_err(db)?.ok_or_else(||bad("Aktivnost ne postoji"))?;
+ if !can_read(&c,dept){return Err(forbidden());}
+ let rows=sqlx::query("SELECT h.id,h.old_title,h.new_title,h.old_description,h.new_description,h.changed_at,u.full_name AS author FROM activity_field_changes h JOIN users u ON u.id=h.changed_by WHERE h.activity_id=$1 ORDER BY h.changed_at DESC,h.id DESC LIMIT 100")
+ .bind(id).fetch_all(&s.db).await.map_err(db)?;
+ Ok(Json(Value::Array(rows.iter().map(|r|json!({
+  "id":r.get::<i64,_>("id"),"old_title":r.get::<String,_>("old_title"),"new_title":r.get::<String,_>("new_title"),
+  "old_description":r.get::<String,_>("old_description"),"new_description":r.get::<String,_>("new_description"),
+  "changed_at":r.get::<chrono::DateTime<Utc>,_>("changed_at"),"author":r.get::<String,_>("author")
+ })).collect())))
+}
+
 #[derive(Deserialize)] struct PeriodFilter {department_id:Uuid,year:i32,month:i32,kind:String}
 fn check_period(y:i32,m:i32,k:&str)->ResultApi<()> { if !(2000..=2100).contains(&y)||!(1..=12).contains(&m)||!["plan","report"].contains(&k) {Err(bad("Nevaljan mjesec, godina ili vrsta dokumenta"))} else {Ok(())} }
 async fn updates(State(s):State<App>,h:HeaderMap,Query(p):Query<PeriodFilter>)->ResultApi<Json<Value>> {
@@ -266,18 +313,55 @@ async fn save_update(State(s):State<App>,h:HeaderMap,Json(p):Json<SaveUpdate>)->
 
 // Carry an unfinished recurring activity into the next month without copying an old
 // accomplishment into the new month's actual results.
-#[derive(Deserialize)] struct CarryRequest {department_id:Uuid,year:i32,month:i32,kind:String}
+
+#[derive(Deserialize)] struct CarryRequest {department_id:Uuid,year:i32,month:i32,kind:String,activity_ids:Vec<Uuid>}
+#[derive(Deserialize)] struct CarryFilter {department_id:Uuid,year:i32,month:i32}
+fn previous_period(year:i32,month:i32)->(i32,i32) {if month==1 {(year-1,12)} else {(year,month-1)}}
+async fn carry_candidates(State(s):State<App>,h:HeaderMap,Query(p):Query<CarryFilter>)->ResultApi<Json<Value>> {
+ let c=who(&s,&h)?;if !can_read(&c,p.department_id){return Err(forbidden());}
+ check_period(p.year,p.month,"plan")?;
+ let (previous_year,previous_month)=previous_period(p.year,p.month);
+ let rows=sqlx::query(r#"
+ SELECT a.id,a.title,u.progress,COALESCE(u.content,'') AS previous_report,
+ EXISTS(SELECT 1 FROM activity_updates next
+   WHERE next.activity_id=a.id AND next.year=$2 AND next.month=$3 AND next.kind='plan') AS already_planned
+ FROM activity_updates u JOIN activities a ON a.id=u.activity_id
+ WHERE a.department_id=$1 AND u.year=$4 AND u.month=$5 AND u.kind='report'
+ AND u.progress IN ('in_progress','postponed','not_started')
+ AND a.status NOT IN ('completed','cancelled')
+ ORDER BY a.sort_order,a.created_at
+ "#).bind(p.department_id).bind(p.year).bind(p.month).bind(previous_year).bind(previous_month).fetch_all(&s.db).await.map_err(db)?;
+ Ok(Json(json!({"source_year":previous_year,"source_month":previous_month,"items":rows.iter().map(|r|json!({
+  "id":r.get::<Uuid,_>("id"),"title":r.get::<String,_>("title"),"progress":r.get::<String,_>("progress"),
+  "previous_report":r.get::<String,_>("previous_report"),"already_planned":r.get::<bool,_>("already_planned")
+ })).collect::<Vec<_>>()})))
+}
 async fn carry_forward(State(s):State<App>,h:HeaderMap,Json(p):Json<CarryRequest>)->ResultApi<Json<Value>> {
- let c=who(&s,&h)?; if !can_manage(&c,p.department_id) {return Err(forbidden());}
+ let c=who(&s,&h)?;if !can_manage(&c,p.department_id){return Err(forbidden());}
  check_period(p.year,p.month,&p.kind)?;
- let status:Option<String>=sqlx::query_scalar("SELECT status FROM department_documents WHERE department_id=$1 AND year=$2 AND month=$3 AND kind=$4")
-  .bind(p.department_id).bind(p.year).bind(p.month).bind(&p.kind).fetch_optional(&s.db).await.map_err(db)?;
- if status.as_deref()==Some("submitted") {return Err(bad("Predani dokument prvo vratite u nacrt"));}
- let (prev_y,prev_m)=if p.month==1 {(p.year-1,12)} else {(p.year,p.month-1)};
- let n=sqlx::query("INSERT INTO activity_updates(activity_id,year,month,kind,content,progress,include_in_document,updated_by) SELECT a.id,$2,$3,$4,'','not_started',u.include_in_document,$7 FROM activity_updates u JOIN activities a ON a.id=u.activity_id WHERE a.department_id=$1 AND u.year=$5 AND u.month=$6 AND u.kind=$4 AND a.type IN ('ongoing','project') AND a.status='in_progress' AND u.progress NOT IN ('completed') ON CONFLICT(activity_id,year,month,kind) DO NOTHING")
-  .bind(p.department_id).bind(p.year).bind(p.month).bind(&p.kind).bind(prev_y).bind(prev_m).bind(c.sub).execute(&s.db).await.map_err(db)?.rows_affected();
+ if p.kind!="plan" {return Err(bad("Nedovršene stavke prenose se u plan sljedećeg mjeseca"));}
+ if p.activity_ids.len()>1000 {return Err(bad("Previše odabranih aktivnosti"));}
+ let wanted:HashSet<Uuid>=p.activity_ids.into_iter().collect();
+ let status:Option<String>=sqlx::query_scalar("SELECT status FROM department_documents WHERE department_id=$1 AND year=$2 AND month=$3 AND kind='plan'")
+ .bind(p.department_id).bind(p.year).bind(p.month).fetch_optional(&s.db).await.map_err(db)?;
+ if status.as_deref()==Some("submitted") {return Err(bad("Predani plan prvo vratite u nacrt"));}
+ let (prev_y,prev_m)=previous_period(p.year,p.month);
+ let mut tx=s.db.begin().await.map_err(db)?;
+ let rows=sqlx::query(r#"
+ SELECT a.id FROM activity_updates u JOIN activities a ON a.id=u.activity_id
+ WHERE a.department_id=$1 AND u.year=$2 AND u.month=$3 AND u.kind='report'
+ AND u.progress IN ('in_progress','postponed','not_started') AND a.status NOT IN ('completed','cancelled')
+ "#).bind(p.department_id).bind(prev_y).bind(prev_m).fetch_all(&mut *tx).await.map_err(db)?;
+ let available:HashSet<Uuid>=rows.iter().map(|r|r.get::<Uuid,_>("id")).collect();
+ if !wanted.is_subset(&available) {return Err(bad("Odabrane aktivnosti nisu nedovršene stavke prethodnog izvješća"));}
+ let mut created=0u64;
+ for id in wanted {
+  created+=sqlx::query("INSERT INTO activity_updates(activity_id,year,month,kind,content,progress,include_in_document,updated_by) VALUES($1,$2,$3,'plan','', 'not_started',true,$4) ON CONFLICT(activity_id,year,month,kind) DO NOTHING")
+   .bind(id).bind(p.year).bind(p.month).bind(c.sub).execute(&mut *tx).await.map_err(db)?.rows_affected();
+ }
+ tx.commit().await.map_err(db)?;
  audit(&s,&c,"updates.carry_forward",Some(p.department_id)).await;
- Ok(Json(json!({"created":n,"source_year":prev_y,"source_month":prev_m})))
+ Ok(Json(json!({"created":created,"source_year":prev_y,"source_month":prev_m})))
 }
 
 // A plan is a reference for reporting, not evidence of work already completed.
@@ -333,6 +417,13 @@ async fn department_docs(State(s):State<App>,h:HeaderMap,Query(p):Query<PeriodFi
 async fn save_department_doc(State(s):State<App>,h:HeaderMap,Json(p):Json<SubmitDept>)->ResultApi<Json<Value>> {
  let c=who(&s,&h)?; if !can_manage(&c,p.department_id) {return Err(forbidden());} check_period(p.year,p.month,&p.kind)?;
  if !["draft","submitted"].contains(&p.status.as_str()) {return Err(bad("Nevaljan status dokumenta"));}
+ if p.status=="submitted" && p.kind=="report" {
+  // Use the business-local calendar, independent of the server's configured timezone.
+  let current:(i32,i32)=sqlx::query_as("SELECT EXTRACT(YEAR FROM now() AT TIME ZONE 'Europe/Zagreb')::int, EXTRACT(MONTH FROM now() AT TIME ZONE 'Europe/Zagreb')::int")
+    .fetch_one(&s.db).await.map_err(db)?;
+  if (p.year,p.month)>current {return Err(bad("Izvješće za budući mjesec može biti nacrt, ali ga još nije moguće predati"));}
+ }
+
  let mut tx=s.db.begin().await.map_err(db)?;
  // Protect the version sequence from concurrent submissions.
  let doc=sqlx::query("INSERT INTO department_documents(department_id,year,month,kind,status,submitted_by,submitted_at) VALUES($1,$2,$3,$4,'draft',NULL,NULL) ON CONFLICT(department_id,year,month,kind) DO UPDATE SET id=department_documents.id RETURNING id")
@@ -654,6 +745,8 @@ async fn health()->Json<Value> {Json(json!({"status":"ok"}))}
   .route("/api/activities",get(activities).post(create_activity)).route("/api/activities/{id}",patch(edit_activity))
   .route("/api/activity-search",get(search_activities))
   .route("/api/activities/{id}/history",get(activity_history))
+  .route("/api/activities/{id}/edit-details",patch(rename_activity))
+  .route("/api/activities/{id}/field-history",get(activity_field_history))
   .route("/api/activities/{id}/people",get(activity_people))
   .route("/api/activities/{id}/threads",get(threads_list).post(thread_create))
   .route("/api/threads/{id}",get(thread_detail))
@@ -664,6 +757,7 @@ async fn health()->Json<Value> {Json(json!({"status":"ok"}))}
   .route("/api/threads/{id}/status",patch(thread_status))
   .route("/api/updates",get(updates).post(save_update))
   .route("/api/updates/carry-forward",post(carry_forward))
+  .route("/api/updates/carry-candidates",get(carry_candidates))
   .route("/api/plan-reference",get(plan_reference))
   .route("/api/activities/reorder",post(reorder_activities))
   .route("/api/activities/{id}/move",post(move_activity))
