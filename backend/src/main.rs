@@ -572,6 +572,9 @@ async fn department_versions(State(s):State<App>,h:HeaderMap,Query(p):Query<Vers
 
 async fn inbox(State(s):State<App>,h:HeaderMap)->ResultApi<Json<Value>> {
  let c=who(&s,&h).await?;
+ if !matches!(c.role.as_str(),"director"|"manager"|"employee"){return Err(forbidden());}
+ let sector=c.sector_id.ok_or_else(forbidden)?;
+ let dept=if director(&c){None}else{Some(c.department_id.ok_or_else(forbidden)?)};
  let rows=sqlx::query(r#"
  SELECT t.id,t.title,t.status,t.updated_at,a.id AS activity_id,a.title AS activity_title,
  d.name AS department_name,a.department_id,
@@ -580,9 +583,9 @@ async fn inbox(State(s):State<App>,h:HeaderMap)->ResultApi<Json<Value>> {
  FROM activity_thread_participants p
  JOIN activity_threads t ON t.id=p.thread_id
  JOIN activities a ON a.id=t.activity_id JOIN departments d ON d.id=a.department_id
- WHERE p.user_id=$1
+ WHERE p.user_id=$1 AND d.sector_id=$2 AND ($3::uuid IS NULL OR a.department_id=$3)
  ORDER BY t.updated_at DESC LIMIT 150
- "#).bind(c.sub).fetch_all(&s.db).await.map_err(db)?;
+ "#).bind(c.sub).bind(sector).bind(dept).fetch_all(&s.db).await.map_err(db)?;
  Ok(Json(Value::Array(rows.iter().map(|r|json!({
   "id":r.get::<Uuid,_>("id"),"title":r.get::<String,_>("title"),"status":r.get::<String,_>("status"),
   "activity_id":r.get::<Uuid,_>("activity_id"),"activity_title":r.get::<String,_>("activity_title"),
@@ -593,6 +596,7 @@ async fn inbox(State(s):State<App>,h:HeaderMap)->ResultApi<Json<Value>> {
 }
 async fn mark_thread_read(State(s):State<App>,h:HeaderMap,Path(id):Path<Uuid>)->ResultApi<Json<Value>> {
  let c=who(&s,&h).await?;
+ thread_access(&s,&c,id).await?;
  let member:bool=sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM activity_thread_participants WHERE thread_id=$1 AND user_id=$2)")
   .bind(id).bind(c.sub).fetch_one(&s.db).await.map_err(db)?;
  if !member{return Err(forbidden());}
