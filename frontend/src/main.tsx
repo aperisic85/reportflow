@@ -6,6 +6,8 @@ import './style.css';
 import HistorySearch from './HistorySearch';
 import Dashboard from './Dashboard';
 import ActivityConversation from './ActivityConversation';
+import CarryPlanner from './CarryPlanner';
+import ActivityDetailsEditor from './ActivityDetailsEditor';
 import Inbox from './Inbox';
 import {DepartmentReportPreview,SectorReportPreview,type DepartmentVersion} from './ReportPreview';
 import MonthlyEntry from './MonthlyEntry';
@@ -42,6 +44,7 @@ function App(){
  const [entrySearch,setEntrySearch]=useState(''),[entryFilter,setEntryFilter]=useState('all');
  const [registrySearch,setRegistrySearch]=useState(''),[registryDetails,setRegistryDetails]=useState<string[]>([]);
  const [showNewActivity,setShowNewActivity]=useState(false);
+ const [editActivityId,setEditActivityId]=useState<string|null>(null);
  const [chatActivityId,setChatActivityId]=useState<string|null>(null),[chatThreadId,setChatThreadId]=useState<string|null>(null);
  const [inboxUnread,setInboxUnread]=useState(0);
  const [versions,setVersions]=useState<DepartmentVersion[]>([]),[selectedVersion,setSelectedVersion]=useState<DepartmentVersion|null>(null);
@@ -94,7 +97,6 @@ function App(){
  async function saveUpdate(activityId:string,content:string,progress:string,include:boolean){await post('/updates',{activity_id:activityId,year,month,kind,content,progress,include_in_document:include});await refresh();}
  async function saveUser(){await post('/users',{...newUser,department_id:newUser.department_id||null});setNewUser({username:'',full_name:'',password:'',role:'employee',department_id:''});await refresh();}
  async function build(){await post('/sector-documents',{year,month,kind,department_ids:chosen,introduction:intro,conclusion});setSelectedDraft(null);await refresh();}
- async function carry(){const r=await post<{created:number;source_month:number;source_year:number}>('/updates/carry-forward',{department_id:dept,year,month,kind});await refresh();return `Preneseno ${r.created} nedovršenih stavki iz ${r.source_month}/${r.source_year}. Prethodni mjesečni opisi nisu kopirani.`;}
  async function moveParent(id:string,parent_id:string|null){await post(`/activities/${id}/move`,{parent_id});await refresh();}
  async function moveOrder(id:string,delta:number){await post('/activities/reorder',{department_id:dept,ordered_ids:siblingMove(activities,id,delta)});await refresh();}
  async function saveSectorDraft(snapshot:SectorSnapshot,introduction:string,conclusion:string){if(!selectedDraft)return;await patch(`/sector-documents/${selectedDraft.id}`,{snapshot,introduction,conclusion});setSelectedDraft(null);await refresh();}
@@ -127,7 +129,7 @@ function App(){
       <option value="all">Sve aktivnosti</option><option value="missing">Bez mjesečnog unosa</option><option value="saved">Sa spremljenim unosom</option>
      </select></label>
     </div>
-    {kind==='report'&&canSubmit&&<details className="simple-options"><summary>Dodatne radnje</summary><p>Možeš prenijeti nedovršene aktivnosti iz prošlog mjeseca bez prepisivanja njihovih opisa.</p><button className="outline" disabled={loading||docStatus==='submitted'} onClick={()=>notify(carry)}>Prenesi nedovršene</button></details>}
+    {kind==='plan'&&<CarryPlanner departmentId={dept} year={year} month={month} canCarry={canSubmit&&docStatus!=='submitted'} onApplied={refresh}/>}
     {activities.length===0?<Empty text="Nema aktivnosti. Prvo dodaj aktivnost u Registru aktivnosti."/>:
      visibleEntries.length===0?<Empty text="Nema aktivnosti koje odgovaraju filtrima."/>:
      <div className="ux-entry-list">{visibleEntries.map(a=><MonthlyEntry
@@ -162,11 +164,13 @@ function App(){
       <div className="ux-registry-actions">
        <span className="simple-registry-status">{statusNames[a.status]}</span>
        <button type="button" className="outline compact" onClick={()=>{setChatActivityId(a.id);setChatThreadId(null);}}><MessageCircle size={14}/> Chat</button>
+       {canSubmit&&<button type="button" className="outline compact" onClick={()=>setEditActivityId(id=>id===a.id?null:a.id)}>Uredi</button>}
        <button type="button" className="outline compact" onClick={()=>toggleRegistryDetails(a.id)}>{registryDetails.includes(a.id)?'Sakrij detalje':'Detalji'}</button>
        <button type="button" className="outline compact" onClick={()=>{setHistoryActivityId(a.id);setTab('history');}}>Povijest</button>
       </div></div>
       {chatActivityId===a.id&&<ActivityConversation key={a.id+'-'+(chatThreadId??'')} activityId={a.id} canManage={canSubmit} openThread={chatThreadId} onClose={()=>{setChatActivityId(null);setChatThreadId(null);void api<Array<{unread:number}>>('/inbox').then(x=>setInboxUnread(x.reduce((n,i)=>n+i.unread,0))).catch(()=>{});}}/>}
       {a.description&&registryDetails.includes(a.id)&&<p className="ux-registry-description">{a.description}</p>}
+      {editActivityId===a.id&&canSubmit&&<ActivityDetailsEditor key={a.id} activity={a} onSaved={refresh} onCancel={()=>setEditActivityId(null)}/>}
       {registryDetails.includes(a.id)&&<div className="ux-registry-details">
        {canSubmit&&<label>Nadređena aktivnost<select value={a.parent_id||''} disabled={loading} onChange={e=>notify(()=>moveParent(a.id,e.target.value||null))}>
         <option value="">Bez nadređene aktivnosti</option>
