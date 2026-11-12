@@ -221,7 +221,7 @@ async fn dashboard(State(s):State<App>,h:HeaderMap,Query(p):Query<DashboardFilte
 #[derive(Deserialize)] struct FilterDept {department_id:Uuid}
 async fn activities(State(s):State<App>,h:HeaderMap,Query(p):Query<FilterDept>)->ResultApi<Json<Value>> {
  let c=who(&s,&h).await?; guard_dept(&s,&c,p.department_id,"read").await?;
- let rows=sqlx::query("SELECT a.id,a.department_id,a.parent_id,a.title,a.description,a.type,a.status,a.sort_order,a.created_by,a.created_at,a.updated_at,u.full_name AS created_by_name FROM activities a LEFT JOIN users u ON u.id=a.created_by WHERE a.department_id=$1 ORDER BY sort_order,created_at").bind(p.department_id).fetch_all(&s.db).await.map_err(db)?;
+ let rows=sqlx::query("SELECT a.id,a.department_id,a.parent_id,a.title,a.description,a.type,a.status,a.sort_order,a.created_by,a.created_at,a.updated_at,u.full_name AS created_by_name FROM activities a LEFT JOIN users u ON u.id=a.created_by WHERE a.department_id=$1 ORDER BY a.sort_order,a.created_at").bind(p.department_id).fetch_all(&s.db).await.map_err(db)?;
  Ok(Json(Value::Array(rows.iter().map(|r|json!({"id":r.get::<Uuid,_>("id"),"department_id":r.get::<Uuid,_>("department_id"),"parent_id":r.get::<Option<Uuid>,_>("parent_id"),"title":r.get::<String,_>("title"),"description":r.get::<String,_>("description"),"type":r.get::<String,_>("type"),"status":r.get::<String,_>("status"),"sort_order":r.get::<i32,_>("sort_order"),"created_by":r.get::<Option<Uuid>,_>("created_by"),"created_by_name":r.get::<Option<String>,_>("created_by_name"),"created_at":r.get::<chrono::DateTime<Utc>,_>("created_at"),"updated_at":r.get::<chrono::DateTime<Utc>,_>("updated_at")})).collect())))
 }
 #[derive(Deserialize)]
