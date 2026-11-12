@@ -15,11 +15,13 @@ export function SectorReportPreview({doc,onClose}:{doc:SectorDoc;onClose:()=>voi
  const snap=doc.snapshot as SectorSnapshot;
  return <section className="report-reader panel">
   <div className="collab-top"><div><span className="report-label">Digitalni pregled</span><h2>{doc.title}</h2>
-   <p>Revizija {doc.revision} · {doc.status==='locked'?'Zaključano':'Nacrt'} · kreirano {stamp(doc.created_at)}</p></div>
+   <p>Revizija {doc.revision} · {doc.status==='locked'?'Zaključano':'Nacrt'} · kreirano {stamp(doc.created_at)}{doc.created_by_name?' · '+doc.created_by_name:''}</p></div>
    <button className="outline" type="button" onClick={onClose}>Zatvori</button></div>
   {doc.introduction.trim()&&<div className="report-intro"><h3>Uvod</h3><p>{doc.introduction}</p></div>}
   {snap.sections.map((sec,index)=><section className="report-section" key={sec.department_id}>
-   <h3>{index+1}. {sec.name}</h3><Items items={sec.items} kind={snap.kind as 'plan'|'report'}/>
+   <h3>{index+1}. {sec.name}</h3>
+   <p className="rf-preview-source">{sec.source_version!=null?'Izvor: predana verzija v'+sec.source_version:'Izvorna verzija nije evidentirana'}{sec.source_submitted_at?' · '+stamp(sec.source_submitted_at):''}{sec.source_submitted_by?' · '+sec.source_submitted_by:''}</p>
+   <Items items={sec.items} kind={snap.kind as 'plan'|'report'}/>
   </section>)}
   {doc.conclusion.trim()&&<div className="report-intro"><h3>Zaključak</h3><p>{doc.conclusion}</p></div>}
   <p className="report-footnote">Ovaj pregled prikazuje sadržaj spremljene revizije. Word/PDF izvoz ostaje zaseban službeni obrazac.</p>
