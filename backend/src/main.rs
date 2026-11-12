@@ -19,63 +19,157 @@ fn bad(s: impl ToString)->ErrApi { ErrApi(StatusCode::BAD_REQUEST,s.to_string())
 fn db(e:sqlx::Error)->ErrApi { ErrApi(StatusCode::INTERNAL_SERVER_ERROR,{ tracing::error!("Database error: {e}"); "Database operation failed".to_string() }) }
 fn forbidden()->ErrApi { ErrApi(StatusCode::FORBIDDEN,"Nedovoljna ovlast".into()) }
 fn unauthorized()->ErrApi { ErrApi(StatusCode::UNAUTHORIZED,"Prijava je potrebna".into()) }
-#[derive(Debug, Serialize, Deserialize)] struct Claims { sub:Uuid, role:String, department_id:Option<Uuid>, exp:usize }
-fn who(s:&App,h:&HeaderMap)->ResultApi<Claims> {
+#[derive(Debug, Serialize, Deserialize)] struct Claims { sub:Uuid, role:String, department_id:Option<Uuid>, #[serde(default)] sector_id:Option<Uuid>, exp:usize }
+async fn who(s:&App,h:&HeaderMap)->ResultApi<Claims> {
  let token=h.get(header::AUTHORIZATION).and_then(|v|v.to_str().ok()).and_then(|v|v.strip_prefix("Bearer ")).ok_or_else(unauthorized)?;
- let c=decode::<Claims>(token,&DecodingKey::from_secret(s.secret.as_bytes()),&Validation::default()).map_err(|_|unauthorized())?.claims;
+ let mut c=decode::<Claims>(token,&DecodingKey::from_secret(s.secret.as_bytes()),&Validation::default()).map_err(|_|unauthorized())?.claims;
+ // Always use current database role/scope: deactivation and edits revoke access immediately.
+ let record=sqlx::query("SELECT role,sector_id,department_id FROM users WHERE id=$1 AND active=true")
+  .bind(c.sub).fetch_optional(&s.db).await.map_err(db)?.ok_or_else(unauthorized)?;
+ c.role=record.get("role");c.sector_id=record.get("sector_id");c.department_id=record.get("department_id");
  Ok(c)
 }
-fn can_read(c:&Claims, dept:Uuid)->bool { matches!(c.role.as_str(),"admin"|"director") || c.department_id==Some(dept) }
-fn can_write(c:&Claims,dept:Uuid)->bool { c.role=="admin" || (matches!(c.role.as_str(),"manager"|"employee") && c.department_id==Some(dept)) }
-fn can_manage(c:&Claims,dept:Uuid)->bool { c.role=="admin" || (c.role=="manager" && c.department_id==Some(dept)) }
-fn director(c:&Claims)->bool { matches!(c.role.as_str(),"admin"|"director") }
+fn org_admin(c:&Claims)->bool {matches!(c.role.as_str(),"admin"|"org_admin")}
+fn director(c:&Claims)->bool {c.role=="director"&&c.sector_id.is_some()}
+async fn guard_dept(s:&App,c:&Claims,dept:Uuid,action:&str)->ResultApi<()> {
+ if matches!(c.role.as_str(),"admin"|"org_admin"){return Err(forbidden());}
+ let sector:Option<Uuid>=sqlx::query_scalar("SELECT sector_id FROM departments WHERE id=$1")
+   .bind(dept).fetch_optional(&s.db).await.map_err(db)?;
+ let sector=sector.ok_or_else(forbidden)?;
+ let permitted=match c.role.as_str(){
+  "director"=>c.sector_id==Some(sector)&&action=="read",
+  "manager"=>c.sector_id==Some(sector)&&c.department_id==Some(dept),
+  "employee"=>c.sector_id==Some(sector)&&c.department_id==Some(dept)&&action!="manage",
+  _=>false
+ };
+ if permitted {Ok(())}else{Err(forbidden())}
+}
+fn role_scope(role:&str,sector:Option<Uuid>,department:Option<Uuid>)->bool {
+ match role {
+  "admin"|"org_admin"=>sector.is_none()&&department.is_none(),
+  "director"=>sector.is_some()&&department.is_none(),
+  "manager"|"employee"=>sector.is_some()&&department.is_some(),
+  _=>false
+ }
+}
 async fn audit(s:&App,c:&Claims,action:&str,id:Option<Uuid>) { let _=sqlx::query("INSERT INTO audit_events(user_id,action,entity_id) VALUES($1,$2,$3)").bind(c.sub).bind(action).bind(id).execute(&s.db).await; }
 fn hash(p:&str)->ResultApi<String> { let salt=SaltString::generate(&mut OsRng); Ok(Argon2::default().hash_password(p.as_bytes(),&salt).map_err(|e|bad(e.to_string()))?.to_string()) }
 
 #[derive(Deserialize)] struct Login { username:String,password:String }
 async fn login(State(s):State<App>,Json(p):Json<Login>)->ResultApi<Json<Value>> {
- let r=sqlx::query("SELECT id,username,full_name,role,department_id,password_hash FROM users WHERE username=$1 AND active=true").bind(&p.username).fetch_optional(&s.db).await.map_err(db)?.ok_or_else(unauthorized)?;
+ let r=sqlx::query("SELECT id,username,full_name,role,department_id,sector_id,password_hash FROM users WHERE username=$1 AND active=true").bind(&p.username).fetch_optional(&s.db).await.map_err(db)?.ok_or_else(unauthorized)?;
  let pass:String=r.get("password_hash");
  let valid=PasswordHash::new(&pass).ok().map(|ph|Argon2::default().verify_password(p.password.as_bytes(),&ph).is_ok()).unwrap_or(false);
  if !valid {return Err(unauthorized());}
- let c=Claims{sub:r.get("id"),role:r.get("role"),department_id:r.get("department_id"),exp:(Utc::now().timestamp()+60*60*12) as usize};
+ let c=Claims{sub:r.get("id"),role:r.get("role"),department_id:r.get("department_id"),sector_id:r.get("sector_id"),exp:(Utc::now().timestamp()+60*60*12) as usize};
  let token=encode(&Header::default(),&c,&EncodingKey::from_secret(s.secret.as_bytes())).map_err(|e|bad(e.to_string()))?;
- Ok(Json(json!({"token":token,"user":{"id":c.sub,"username":p.username,"name":r.get::<String,_>("full_name"),"role":c.role,"department_id":c.department_id}})))
+ Ok(Json(json!({"token":token,"user":{"id":c.sub,"username":p.username,"name":r.get::<String,_>("full_name"),"role":c.role,"department_id":c.department_id,"sector_id":c.sector_id}})))
 }
 async fn me(State(s):State<App>,h:HeaderMap)->ResultApi<Json<Value>> {
- let c=who(&s,&h)?;
+ let c=who(&s,&h).await?;
  let r=sqlx::query("SELECT username,full_name FROM users WHERE id=$1 AND active=true").bind(c.sub).fetch_optional(&s.db).await.map_err(db)?.ok_or_else(unauthorized)?;
- Ok(Json(json!({"id":c.sub,"username":r.get::<String,_>("username"),"name":r.get::<String,_>("full_name"),"role":c.role,"department_id":c.department_id})))
-}
-async fn departments(State(s):State<App>,h:HeaderMap)->ResultApi<Json<Value>> {
- let _=who(&s,&h)?;
- let rows=sqlx::query("SELECT id,code,name,sort_order FROM departments ORDER BY sort_order").fetch_all(&s.db).await.map_err(db)?;
- Ok(Json(Value::Array(rows.iter().map(|r|json!({"id":r.get::<Uuid,_>("id"),"code":r.get::<String,_>("code"),"name":r.get::<String,_>("name"),"sort_order":r.get::<i32,_>("sort_order")})).collect())))
-}
-#[derive(Deserialize)] struct NewUser { username:String,full_name:String,password:String,role:String,department_id:Option<Uuid> }
-async fn create_user(State(s):State<App>,h:HeaderMap,Json(p):Json<NewUser>)->ResultApi<Json<Value>> {
- let c=who(&s,&h)?; if c.role!="admin" {return Err(forbidden());}
- if !["admin","director","manager","employee"].contains(&p.role.as_str()) || p.password.len()<10 {return Err(bad("Uloga nije valjana ili je lozinka kraća od 10 znakova"));}
- if matches!(p.role.as_str(),"manager"|"employee") && p.department_id.is_none() {return Err(bad("Odjel je obvezan"));}
- let id:Uuid=sqlx::query_scalar("INSERT INTO users(username,full_name,password_hash,role,department_id) VALUES($1,$2,$3,$4,$5) RETURNING id").bind(p.username).bind(p.full_name).bind(hash(&p.password)?).bind(p.role).bind(p.department_id).fetch_one(&s.db).await.map_err(db)?;
- audit(&s,&c,"user.create",Some(id)).await; Ok(Json(json!({"id":id})))
-}
-async fn users(State(s):State<App>,h:HeaderMap)->ResultApi<Json<Value>> {
- let c=who(&s,&h)?; if c.role!="admin" {return Err(forbidden());}
- let rows=sqlx::query("SELECT id,username,full_name,role,department_id,active FROM users ORDER BY full_name").fetch_all(&s.db).await.map_err(db)?;
- Ok(Json(Value::Array(rows.iter().map(|r|json!({"id":r.get::<Uuid,_>("id"),"username":r.get::<String,_>("username"),"full_name":r.get::<String,_>("full_name"),"role":r.get::<String,_>("role"),"department_id":r.get::<Option<Uuid>,_>("department_id"),"active":r.get::<bool,_>("active")})).collect())))
+ Ok(Json(json!({"id":c.sub,"username":r.get::<String,_>("username"),"name":r.get::<String,_>("full_name"),"role":c.role,"department_id":c.department_id,"sector_id":c.sector_id})))
 }
 
+async fn sectors(State(s):State<App>,h:HeaderMap)->ResultApi<Json<Value>> {
+ let c=who(&s,&h).await?;
+ let rows=if org_admin(&c) {
+  sqlx::query("SELECT id,code,name,created_at FROM sectors ORDER BY name").fetch_all(&s.db).await.map_err(db)?
+ }else{
+  let id=c.sector_id.ok_or_else(forbidden)?;
+  sqlx::query("SELECT id,code,name,created_at FROM sectors WHERE id=$1 ORDER BY name").bind(id).fetch_all(&s.db).await.map_err(db)?
+ };
+ Ok(Json(Value::Array(rows.iter().map(|r|json!({"id":r.get::<Uuid,_>("id"),"code":r.get::<String,_>("code"),"name":r.get::<String,_>("name")})).collect())))
+}
+#[derive(Deserialize)] struct NewSector {code:String,name:String}
+async fn create_sector(State(s):State<App>,h:HeaderMap,Json(p):Json<NewSector>)->ResultApi<Json<Value>> {
+ let c=who(&s,&h).await?;if !org_admin(&c){return Err(forbidden());}
+ let code=p.code.trim().to_uppercase();
+ if code.is_empty()||code.len()>20||p.name.trim().is_empty()||p.name.len()>200{return Err(bad("Nevaljan kod ili naziv sektora"));}
+ let id:Uuid=sqlx::query_scalar("INSERT INTO sectors(code,name) VALUES($1,$2) RETURNING id")
+ .bind(code).bind(p.name.trim()).fetch_one(&s.db).await.map_err(db)?;
+ audit(&s,&c,"sector.create",Some(id)).await;Ok(Json(json!({"id":id})))
+}
+async fn departments(State(s):State<App>,h:HeaderMap)->ResultApi<Json<Value>> {
+ let c=who(&s,&h).await?;
+ let rows=if org_admin(&c) {
+  sqlx::query("SELECT id,code,name,sort_order,sector_id FROM departments ORDER BY sector_id,sort_order,name")
+   .fetch_all(&s.db).await.map_err(db)?
+ }else{
+  let sector=c.sector_id.ok_or_else(forbidden)?;
+  sqlx::query("SELECT id,code,name,sort_order,sector_id FROM departments WHERE sector_id=$1 ORDER BY sort_order,name")
+   .bind(sector).fetch_all(&s.db).await.map_err(db)?
+ };
+ Ok(Json(Value::Array(rows.iter().map(|r|json!({"id":r.get::<Uuid,_>("id"),"code":r.get::<String,_>("code"),"name":r.get::<String,_>("name"),"sort_order":r.get::<i32,_>("sort_order"),"sector_id":r.get::<Uuid,_>("sector_id")})).collect())))
+}
+#[derive(Deserialize)] struct NewDepartment {sector_id:Uuid,code:String,name:String}
+async fn create_department(State(s):State<App>,h:HeaderMap,Json(p):Json<NewDepartment>)->ResultApi<Json<Value>> {
+ let c=who(&s,&h).await?;if !org_admin(&c){return Err(forbidden());}
+ if p.code.trim().is_empty()||p.code.len()>20||p.name.trim().is_empty()||p.name.len()>200{return Err(bad("Nevaljan kod ili naziv odjela"));}
+ let id:Uuid=sqlx::query_scalar("INSERT INTO departments(sector_id,code,name) VALUES($1,$2,$3) RETURNING id")
+  .bind(p.sector_id).bind(p.code.trim().to_uppercase()).bind(p.name.trim()).fetch_one(&s.db).await.map_err(db)?;
+ audit(&s,&c,"department.create",Some(id)).await;Ok(Json(json!({"id":id})))
+}
+#[derive(Deserialize)] struct NewUser { username:String,full_name:String,password:String,role:String,sector_id:Option<Uuid>,department_id:Option<Uuid> }
+async fn validate_target_user(s:&App,p_role:&str,p_sector:Option<Uuid>,p_dept:Option<Uuid>)->ResultApi<()> {
+ if !role_scope(p_role,p_sector,p_dept) {return Err(bad("Uloga nije usklađena sa sektorom i odjelom"));}
+ if let Some(sector)=p_sector {
+  let found:bool=sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM sectors WHERE id=$1)").bind(sector).fetch_one(&s.db).await.map_err(db)?;
+  if !found{return Err(bad("Sektor ne postoji"));}
+ }
+ if let Some(dept)=p_dept {
+  let linked:bool=sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM departments WHERE id=$1 AND sector_id=$2)")
+  .bind(dept).bind(p_sector).fetch_one(&s.db).await.map_err(db)?;
+  if !linked{return Err(bad("Odjel nije u odabranom sektoru"));}
+ }
+ Ok(())
+}
+async fn create_user(State(s):State<App>,h:HeaderMap,Json(p):Json<NewUser>)->ResultApi<Json<Value>> {
+ let c=who(&s,&h).await?;if !org_admin(&c){return Err(forbidden());}
+ if p.role=="admin"&&c.role!="admin"{return Err(forbidden());}
+ if p.password.len()<10||p.username.trim().is_empty()||p.full_name.trim().is_empty(){return Err(bad("Unesi korisničko ime, ime i lozinku od najmanje 10 znakova"));}
+ validate_target_user(&s,&p.role,p.sector_id,p.department_id).await?;
+ let id:Uuid=sqlx::query_scalar("INSERT INTO users(username,full_name,password_hash,role,sector_id,department_id) VALUES($1,$2,$3,$4,$5,$6) RETURNING id")
+  .bind(p.username.trim()).bind(p.full_name.trim()).bind(hash(&p.password)?).bind(&p.role).bind(p.sector_id).bind(p.department_id).fetch_one(&s.db).await.map_err(db)?;
+ audit(&s,&c,"user.create",Some(id)).await;Ok(Json(json!({"id":id})))
+}
+async fn users(State(s):State<App>,h:HeaderMap)->ResultApi<Json<Value>> {
+ let c=who(&s,&h).await?;if !org_admin(&c){return Err(forbidden());}
+ let rows=sqlx::query("SELECT id,username,full_name,role,sector_id,department_id,active,created_at FROM users ORDER BY full_name")
+ .fetch_all(&s.db).await.map_err(db)?;
+ Ok(Json(Value::Array(rows.iter().map(|r|json!({
+  "id":r.get::<Uuid,_>("id"),"username":r.get::<String,_>("username"),"full_name":r.get::<String,_>("full_name"),
+  "role":r.get::<String,_>("role"),"sector_id":r.get::<Option<Uuid>,_>("sector_id"),
+  "department_id":r.get::<Option<Uuid>,_>("department_id"),"active":r.get::<bool,_>("active"),
+  "created_at":r.get::<chrono::DateTime<Utc>,_>("created_at")
+ })).collect())))
+}
+#[derive(Deserialize)] struct UpdateUser {username:String,full_name:String,role:String,sector_id:Option<Uuid>,department_id:Option<Uuid>,active:bool,password:Option<String>}
+async fn update_user(State(s):State<App>,h:HeaderMap,Path(id):Path<Uuid>,Json(p):Json<UpdateUser>)->ResultApi<Json<Value>> {
+ let c=who(&s,&h).await?;if !org_admin(&c){return Err(forbidden());}
+ let previous=sqlx::query("SELECT role,active FROM users WHERE id=$1").bind(id).fetch_optional(&s.db).await.map_err(db)?.ok_or_else(||bad("Korisnik ne postoji"))?;
+ let old_role:String=previous.get("role");
+ if (p.role=="admin"||old_role=="admin")&&c.role!="admin"{return Err(forbidden());}
+ if id==c.sub&&(p.role!=c.role||!p.active){return Err(bad("Ne možeš sebi ukloniti administratorsku ulogu ili deaktivirati račun"));}
+ if p.full_name.trim().is_empty()||p.username.trim().is_empty()||p.username.trim().len()>100{return Err(bad("Korisničko ime i ime su obvezni"));}
+ if let Some(pass)=&p.password {if !pass.is_empty()&&pass.len()<10{return Err(bad("Nova lozinka mora imati najmanje 10 znakova"));}}
+ validate_target_user(&s,&p.role,p.sector_id,p.department_id).await?;
+ let pwd=match p.password.as_deref(){Some(value) if !value.is_empty()=>Some(hash(value)?),_=>None};
+ sqlx::query("UPDATE users SET full_name=$2,role=$3,sector_id=$4,department_id=$5,active=$6,password_hash=COALESCE($7,password_hash),username=$8 WHERE id=$1")
+  .bind(id).bind(p.full_name.trim()).bind(&p.role).bind(p.sector_id).bind(p.department_id).bind(p.active).bind(pwd).bind(p.username.trim())
+  .execute(&s.db).await.map_err(db)?;
+ audit(&s,&c,"user.update",Some(id)).await;Ok(Json(json!({"ok":true})))
+}
 #[derive(Deserialize)] struct DashboardFilter { year:i32, month:i32 }
 fn dashboard_period_valid(year:i32,month:i32)->bool { (2000..=2100).contains(&year) && (1..=12).contains(&month) }
 async fn dashboard(State(s):State<App>,h:HeaderMap,Query(p):Query<DashboardFilter>)->ResultApi<Json<Value>> {
- let c=who(&s,&h)?;
+ let c=who(&s,&h).await?;
  if !dashboard_period_valid(p.year,p.month) {
   return Err(bad("Nevaljan mjesec ili godina"));
  }
- let scoped_dept=if director(&c) {None} else {
-  Some(c.department_id.ok_or_else(forbidden)?)
- };
+ if !matches!(c.role.as_str(),"director"|"manager"|"employee"){return Err(forbidden());}
+ let scope_sector=c.sector_id.ok_or_else(forbidden)?;
+ let scoped_dept=if director(&c) {None} else {Some(c.department_id.ok_or_else(forbidden)?)};
  // Counts are sourced from distinct activities, never from a join with multiple updates.
  let departments=sqlx::query(r#"
  SELECT d.id,d.name,d.code,
@@ -91,17 +185,17 @@ async fn dashboard(State(s):State<App>,h:HeaderMap,Query(p):Query<DashboardFilte
       WHERE dd.department_id=d.id AND dd.year=$2 AND dd.month=$3 AND dd.kind='report'),'draft') AS report_status,
    COALESCE((SELECT dd.status FROM department_documents dd
       WHERE dd.department_id=d.id AND dd.year=$2 AND dd.month=$3 AND dd.kind='plan'),'draft') AS plan_status
- FROM departments d WHERE ($1::uuid IS NULL OR d.id=$1)
+ FROM departments d WHERE ($1::uuid IS NULL OR d.id=$1) AND d.sector_id=$4
  ORDER BY d.sort_order,d.name
- "#).bind(scoped_dept).bind(p.year).bind(p.month).fetch_all(&s.db).await.map_err(db)?;
+ "#).bind(scoped_dept).bind(p.year).bind(p.month).bind(scope_sector).fetch_all(&s.db).await.map_err(db)?;
  let recent=sqlx::query(r#"
  SELECT u.activity_id,a.title,d.name AS department_name,u.year,u.month,u.kind,
         u.content,u.progress,u.updated_at
  FROM activity_updates u JOIN activities a ON a.id=u.activity_id
  JOIN departments d ON d.id=a.department_id
- WHERE ($1::uuid IS NULL OR d.id=$1)
+ WHERE ($1::uuid IS NULL OR d.id=$1) AND d.sector_id=$2
  ORDER BY u.updated_at DESC,u.id DESC LIMIT 8
- "#).bind(scoped_dept).fetch_all(&s.db).await.map_err(db)?;
+ "#).bind(scoped_dept).bind(scope_sector).fetch_all(&s.db).await.map_err(db)?;
  Ok(Json(json!({
   "year":p.year,"month":p.month,
   "departments":departments.iter().map(|r|json!({
@@ -126,7 +220,7 @@ async fn dashboard(State(s):State<App>,h:HeaderMap,Query(p):Query<DashboardFilte
 
 #[derive(Deserialize)] struct FilterDept {department_id:Uuid}
 async fn activities(State(s):State<App>,h:HeaderMap,Query(p):Query<FilterDept>)->ResultApi<Json<Value>> {
- let c=who(&s,&h)?; if !can_read(&c,p.department_id) {return Err(forbidden());}
+ let c=who(&s,&h).await?; guard_dept(&s,&c,p.department_id,"read").await?;
  let rows=sqlx::query("SELECT id,department_id,parent_id,title,description,type,status,sort_order,created_by,created_at,updated_at FROM activities WHERE department_id=$1 ORDER BY sort_order,created_at").bind(p.department_id).fetch_all(&s.db).await.map_err(db)?;
  Ok(Json(Value::Array(rows.iter().map(|r|json!({"id":r.get::<Uuid,_>("id"),"department_id":r.get::<Uuid,_>("department_id"),"parent_id":r.get::<Option<Uuid>,_>("parent_id"),"title":r.get::<String,_>("title"),"description":r.get::<String,_>("description"),"type":r.get::<String,_>("type"),"status":r.get::<String,_>("status"),"sort_order":r.get::<i32,_>("sort_order"),"created_by":r.get::<Option<Uuid>,_>("created_by"),"created_at":r.get::<chrono::DateTime<Utc>,_>("created_at"),"updated_at":r.get::<chrono::DateTime<Utc>,_>("updated_at")})).collect())))
 }
@@ -143,16 +237,18 @@ fn search_pattern(term:&str)->String {
  format!("%{}%",term.replace('\\',"\\\\").replace('%',"\\%").replace('_',"\\_"))
 }
 async fn search_activities(State(s):State<App>,h:HeaderMap,Query(p):Query<ActivitySearchFilter>)->ResultApi<Json<Value>> {
- let c=who(&s,&h)?;
+ let c=who(&s,&h).await?;
  let term=p.q.trim();
  if term.chars().count()<2 || term.chars().count()>120 {return Err(bad("Pretraga zahtijeva 2 do 120 znakova"));}
  if let Some(y)=p.year {if !(2000..=2100).contains(&y){return Err(bad("Nevaljana godina"));}}
  if let Some(m)=p.month {if !(1..=12).contains(&m){return Err(bad("Nevaljan mjesec"));}}
  if let Some(k)=&p.kind {if !["plan","report"].contains(&k.as_str()){return Err(bad("Nevaljana vrsta dokumenta"));}}
- let scope=if director(&c) {p.department_id} else {
+ if !matches!(c.role.as_str(),"director"|"manager"|"employee"){return Err(forbidden());}
+ let sector=c.sector_id.ok_or_else(forbidden)?;
+ if let Some(requested)=p.department_id {guard_dept(&s,&c,requested,"read").await?;}
+ let scope=if director(&c){p.department_id}else{
   let d=c.department_id.ok_or_else(forbidden)?;
-  if p.department_id.is_some() && p.department_id!=Some(d) {return Err(forbidden());}
-  Some(d)
+  if p.department_id.is_some()&&p.department_id!=Some(d){return Err(forbidden());}Some(d)
  };
  let pattern=search_pattern(term);
  let rows=sqlx::query(r#"
@@ -162,7 +258,7 @@ async fn search_activities(State(s):State<App>,h:HeaderMap,Query(p):Query<Activi
  FROM activities a
  JOIN departments d ON d.id=a.department_id
  LEFT JOIN activity_updates u ON u.activity_id=a.id
- WHERE ($1::uuid IS NULL OR a.department_id=$1)
+ WHERE ($1::uuid IS NULL OR a.department_id=$1) AND d.sector_id=$7
    AND (a.title ILIKE $2 ESCAPE '\' OR a.description ILIKE $2 ESCAPE '\'
         OR u.content ILIKE $2 ESCAPE '\')
    AND ($3::int IS NULL OR u.year=$3)
@@ -172,7 +268,7 @@ async fn search_activities(State(s):State<App>,h:HeaderMap,Query(p):Query<Activi
  LIMIT $6
  "#)
  .bind(scope).bind(pattern).bind(p.year).bind(p.month).bind(p.kind)
- .bind(p.limit.unwrap_or(50).clamp(1,100))
+ .bind(p.limit.unwrap_or(50).clamp(1,100)).bind(sector)
  .fetch_all(&s.db).await.map_err(db)?;
  Ok(Json(Value::Array(rows.iter().map(|r|json!({
   "activity_id":r.get::<Uuid,_>("activity_id"),
@@ -192,12 +288,12 @@ async fn search_activities(State(s):State<App>,h:HeaderMap,Query(p):Query<Activi
  })).collect())))
 }
 async fn activity_history(State(s):State<App>,h:HeaderMap,Path(id):Path<Uuid>)->ResultApi<Json<Value>> {
- let c=who(&s,&h)?;
+ let c=who(&s,&h).await?;
  let a=sqlx::query("SELECT a.id,a.department_id,d.name AS department_name,a.parent_id,a.title,a.description,a.type,a.status FROM activities a JOIN departments d ON d.id=a.department_id WHERE a.id=$1")
   .bind(id).fetch_optional(&s.db).await.map_err(db)?
   .ok_or_else(||ErrApi(StatusCode::NOT_FOUND,"Aktivnost nije pronađena".into()))?;
  let dept:Uuid=a.get("department_id");
- if !can_read(&c,dept) {return Err(forbidden());}
+ guard_dept(&s,&c,dept,"read").await?;
  let rows=sqlx::query(r#"
  SELECT u.id,u.year,u.month,u.kind,u.content,u.progress,u.include_in_document,u.updated_at,
         usr.full_name AS updated_by_name
@@ -228,7 +324,7 @@ async fn activity_history(State(s):State<App>,h:HeaderMap,Path(id):Path<Uuid>)->
 
 #[derive(Deserialize)] struct NewActivity { department_id:Uuid,parent_id:Option<Uuid>,title:String,description:Option<String>,#[serde(rename="type")] activity_type:String,sort_order:Option<i32> }
 async fn create_activity(State(s):State<App>,h:HeaderMap,Json(p):Json<NewActivity>)->ResultApi<Json<Value>> {
- let c=who(&s,&h)?; if !can_write(&c,p.department_id) {return Err(forbidden());}
+ let c=who(&s,&h).await?; guard_dept(&s,&c,p.department_id,"write").await?;
  if p.title.trim().is_empty() || !["ongoing","project","one_off"].contains(&p.activity_type.as_str()) {return Err(bad("Naziv ili vrsta aktivnosti nije valjana"));}
  if let Some(parent)=p.parent_id { let d:Option<Uuid>=sqlx::query_scalar("SELECT department_id FROM activities WHERE id=$1").bind(parent).fetch_optional(&s.db).await.map_err(db)?; if d!=Some(p.department_id) {return Err(bad("Podstavka mora biti iz istog odjela"));} }
  let id:Uuid=sqlx::query_scalar("INSERT INTO activities(department_id,parent_id,title,description,type,sort_order,created_by) VALUES($1,$2,$3,$4,$5,$6,$7) RETURNING id").bind(p.department_id).bind(p.parent_id).bind(p.title).bind(p.description.unwrap_or_default()).bind(p.activity_type).bind(p.sort_order.unwrap_or(0)).bind(c.sub).fetch_one(&s.db).await.map_err(db)?;
@@ -236,14 +332,14 @@ async fn create_activity(State(s):State<App>,h:HeaderMap,Json(p):Json<NewActivit
 }
 #[derive(Deserialize)] struct EditActivity {title:String,description:String,status:String,sort_order:i32}
 async fn edit_activity(State(s):State<App>,h:HeaderMap,Path(id):Path<Uuid>,Json(p):Json<EditActivity>)->ResultApi<Json<Value>> {
- let c=who(&s,&h)?;
+ let c=who(&s,&h).await?;
  if p.title.trim().is_empty()||p.title.len()>1000||p.description.len()>12000 {return Err(bad("Nevaljan naslov ili opis"));}
  if !["in_progress","completed","paused","cancelled"].contains(&p.status.as_str()){return Err(bad("Nevaljan status"));}
  let mut tx=s.db.begin().await.map_err(db)?;
  let row=sqlx::query("SELECT department_id,created_by,title,description FROM activities WHERE id=$1 FOR UPDATE")
   .bind(id).fetch_optional(&mut *tx).await.map_err(db)?.ok_or_else(||bad("Aktivnost ne postoji"))?;
  let dept:Uuid=row.get("department_id");let owner:Option<Uuid>=row.get("created_by");
- if !can_write(&c,dept)||(c.role=="employee"&&owner!=Some(c.sub)){return Err(forbidden());}
+ guard_dept(&s,&c,dept,"write").await?;if c.role=="employee"&&owner!=Some(c.sub){return Err(forbidden());}
  let old_title:String=row.get("title");let old_description:String=row.get("description");
  if old_title!=p.title||old_description!=p.description {
   sqlx::query("INSERT INTO activity_field_changes(activity_id,changed_by,old_title,new_title,old_description,new_description) VALUES($1,$2,$3,$4,$5,$6)")
@@ -256,7 +352,7 @@ async fn edit_activity(State(s):State<App>,h:HeaderMap,Path(id):Path<Uuid>,Json(
 }
 #[derive(Deserialize)] struct RenameActivity {title:String,description:String}
 async fn rename_activity(State(s):State<App>,h:HeaderMap,Path(id):Path<Uuid>,Json(p):Json<RenameActivity>)->ResultApi<Json<Value>> {
- let c=who(&s,&h)?;
+ let c=who(&s,&h).await?;
  if p.title.trim().is_empty() || p.title.len()>1000 || p.description.len()>12000 {
   return Err(bad("Naziv je obavezan i mora biti kraći od 1000 znakova, opis od 12000 znakova"));
  }
@@ -264,7 +360,7 @@ async fn rename_activity(State(s):State<App>,h:HeaderMap,Path(id):Path<Uuid>,Jso
  let row=sqlx::query("SELECT department_id,title,description FROM activities WHERE id=$1 FOR UPDATE")
   .bind(id).fetch_optional(&mut *tx).await.map_err(db)?.ok_or_else(||bad("Aktivnost ne postoji"))?;
  let dept:Uuid=row.get("department_id");
- if !can_manage(&c,dept){return Err(forbidden());}
+ guard_dept(&s,&c,dept,"manage").await?;
  let old_title:String=row.get("title");let old_description:String=row.get("description");
  let new_title=p.title.trim();
  if old_title!=new_title || old_description!=p.description {
@@ -278,10 +374,10 @@ async fn rename_activity(State(s):State<App>,h:HeaderMap,Path(id):Path<Uuid>,Jso
  Ok(Json(json!({"ok":true})))
 }
 async fn activity_field_history(State(s):State<App>,h:HeaderMap,Path(id):Path<Uuid>)->ResultApi<Json<Value>> {
- let c=who(&s,&h)?;
+ let c=who(&s,&h).await?;
  let dept:Uuid=sqlx::query_scalar("SELECT department_id FROM activities WHERE id=$1")
  .bind(id).fetch_optional(&s.db).await.map_err(db)?.ok_or_else(||bad("Aktivnost ne postoji"))?;
- if !can_read(&c,dept){return Err(forbidden());}
+ guard_dept(&s,&c,dept,"read").await?;
  let rows=sqlx::query("SELECT h.id,h.old_title,h.new_title,h.old_description,h.new_description,h.changed_at,u.full_name AS author FROM activity_field_changes h JOIN users u ON u.id=h.changed_by WHERE h.activity_id=$1 ORDER BY h.changed_at DESC,h.id DESC LIMIT 100")
  .bind(id).fetch_all(&s.db).await.map_err(db)?;
  Ok(Json(Value::Array(rows.iter().map(|r|json!({
@@ -294,16 +390,16 @@ async fn activity_field_history(State(s):State<App>,h:HeaderMap,Path(id):Path<Uu
 #[derive(Deserialize)] struct PeriodFilter {department_id:Uuid,year:i32,month:i32,kind:String}
 fn check_period(y:i32,m:i32,k:&str)->ResultApi<()> { if !(2000..=2100).contains(&y)||!(1..=12).contains(&m)||!["plan","report"].contains(&k) {Err(bad("Nevaljan mjesec, godina ili vrsta dokumenta"))} else {Ok(())} }
 async fn updates(State(s):State<App>,h:HeaderMap,Query(p):Query<PeriodFilter>)->ResultApi<Json<Value>> {
- let c=who(&s,&h)?; if !can_read(&c,p.department_id) {return Err(forbidden());} check_period(p.year,p.month,&p.kind)?;
+ let c=who(&s,&h).await?; guard_dept(&s,&c,p.department_id,"read").await?; check_period(p.year,p.month,&p.kind)?;
  let rows=sqlx::query("SELECT u.id,u.activity_id,u.content,u.progress,u.include_in_document,u.updated_at FROM activity_updates u JOIN activities a ON a.id=u.activity_id WHERE a.department_id=$1 AND u.year=$2 AND u.month=$3 AND u.kind=$4 ORDER BY a.sort_order,a.created_at").bind(p.department_id).bind(p.year).bind(p.month).bind(p.kind).fetch_all(&s.db).await.map_err(db)?;
  Ok(Json(Value::Array(rows.iter().map(|r|json!({"id":r.get::<Uuid,_>("id"),"activity_id":r.get::<Uuid,_>("activity_id"),"content":r.get::<String,_>("content"),"progress":r.get::<String,_>("progress"),"include_in_document":r.get::<bool,_>("include_in_document"),"updated_at":r.get::<chrono::DateTime<Utc>,_>("updated_at")})).collect())))
 }
 #[derive(Deserialize)] struct SaveUpdate {activity_id:Uuid,year:i32,month:i32,kind:String,content:String,progress:String,include_in_document:bool}
 async fn save_update(State(s):State<App>,h:HeaderMap,Json(p):Json<SaveUpdate>)->ResultApi<Json<Value>> {
- let c=who(&s,&h)?; check_period(p.year,p.month,&p.kind)?;
+ let c=who(&s,&h).await?; check_period(p.year,p.month,&p.kind)?;
  let r=sqlx::query("SELECT department_id,created_by FROM activities WHERE id=$1").bind(p.activity_id).fetch_optional(&s.db).await.map_err(db)?.ok_or_else(||bad("Aktivnost ne postoji"))?;
  let d:Uuid=r.get("department_id"); let owner:Option<Uuid>=r.get("created_by");
- if !can_write(&c,d) || (c.role=="employee" && owner!=Some(c.sub)) {return Err(forbidden());}
+ guard_dept(&s,&c,d,"write").await?;if c.role=="employee"&&owner!=Some(c.sub){return Err(forbidden());}
  if !["in_progress","completed","postponed","not_started"].contains(&p.progress.as_str()) {return Err(bad("Nevaljan status realizacije"));}
  let status:Option<String>=sqlx::query_scalar("SELECT status FROM department_documents WHERE department_id=$1 AND year=$2 AND month=$3 AND kind=$4").bind(d).bind(p.year).bind(p.month).bind(&p.kind).fetch_optional(&s.db).await.map_err(db)?;
  if status.as_deref()==Some("submitted") {return Err(bad("Dokument je predan; voditelj ga prvo mora vratiti u nacrt"));}
@@ -318,7 +414,7 @@ async fn save_update(State(s):State<App>,h:HeaderMap,Json(p):Json<SaveUpdate>)->
 #[derive(Deserialize)] struct CarryFilter {department_id:Uuid,year:i32,month:i32}
 fn previous_period(year:i32,month:i32)->(i32,i32) {if month==1 {(year-1,12)} else {(year,month-1)}}
 async fn carry_candidates(State(s):State<App>,h:HeaderMap,Query(p):Query<CarryFilter>)->ResultApi<Json<Value>> {
- let c=who(&s,&h)?;if !can_read(&c,p.department_id){return Err(forbidden());}
+ let c=who(&s,&h).await?;guard_dept(&s,&c,p.department_id,"read").await?;
  check_period(p.year,p.month,"plan")?;
  let (previous_year,previous_month)=previous_period(p.year,p.month);
  let rows=sqlx::query(r#"
@@ -337,7 +433,7 @@ async fn carry_candidates(State(s):State<App>,h:HeaderMap,Query(p):Query<CarryFi
  })).collect::<Vec<_>>()})))
 }
 async fn carry_forward(State(s):State<App>,h:HeaderMap,Json(p):Json<CarryRequest>)->ResultApi<Json<Value>> {
- let c=who(&s,&h)?;if !can_manage(&c,p.department_id){return Err(forbidden());}
+ let c=who(&s,&h).await?;guard_dept(&s,&c,p.department_id,"manage").await?;
  check_period(p.year,p.month,&p.kind)?;
  if p.kind!="plan" {return Err(bad("Nedovršene stavke prenose se u plan sljedećeg mjeseca"));}
  if p.activity_ids.len()>1000 {return Err(bad("Previše odabranih aktivnosti"));}
@@ -366,7 +462,7 @@ async fn carry_forward(State(s):State<App>,h:HeaderMap,Json(p):Json<CarryRequest
 
 // A plan is a reference for reporting, not evidence of work already completed.
 async fn plan_reference(State(s):State<App>,h:HeaderMap,Query(p):Query<PeriodFilter>)->ResultApi<Json<Value>> {
- let c=who(&s,&h)?; if !can_read(&c,p.department_id) {return Err(forbidden());} check_period(p.year,p.month,&p.kind)?;
+ let c=who(&s,&h).await?; guard_dept(&s,&c,p.department_id,"read").await?; check_period(p.year,p.month,&p.kind)?;
  let rows=sqlx::query("SELECT a.id AS activity_id,a.title,COALESCE(NULLIF(u.content,''),a.description) AS planned FROM activities a JOIN activity_updates u ON u.activity_id=a.id AND u.year=$2 AND u.month=$3 AND u.kind='plan' WHERE a.department_id=$1 AND u.include_in_document=true ORDER BY a.sort_order,a.created_at")
   .bind(p.department_id).bind(p.year).bind(p.month).fetch_all(&s.db).await.map_err(db)?;
  Ok(Json(Value::Array(rows.iter().map(|r|json!({"activity_id":r.get::<Uuid,_>("activity_id"),"title":r.get::<String,_>("title"),"planned":r.get::<String,_>("planned")})).collect())))
@@ -374,7 +470,7 @@ async fn plan_reference(State(s):State<App>,h:HeaderMap,Query(p):Query<PeriodFil
 
 #[derive(Deserialize)] struct ReorderActivities {department_id:Uuid,ordered_ids:Vec<Uuid>}
 async fn reorder_activities(State(s):State<App>,h:HeaderMap,Json(p):Json<ReorderActivities>)->ResultApi<Json<Value>> {
- let c=who(&s,&h)?; if !can_manage(&c,p.department_id) {return Err(forbidden());}
+ let c=who(&s,&h).await?; guard_dept(&s,&c,p.department_id,"manage").await?;
  let mut tx=s.db.begin().await.map_err(db)?;
  let rows=sqlx::query("SELECT id FROM activities WHERE department_id=$1 FOR UPDATE")
   .bind(p.department_id).fetch_all(&mut *tx).await.map_err(db)?;
@@ -392,9 +488,9 @@ async fn reorder_activities(State(s):State<App>,h:HeaderMap,Json(p):Json<Reorder
 
 #[derive(Deserialize)] struct MoveActivity {parent_id:Option<Uuid>}
 async fn move_activity(State(s):State<App>,h:HeaderMap,Path(id):Path<Uuid>,Json(p):Json<MoveActivity>)->ResultApi<Json<Value>> {
- let c=who(&s,&h)?;
+ let c=who(&s,&h).await?;
  let dept:Uuid=sqlx::query_scalar("SELECT department_id FROM activities WHERE id=$1").bind(id).fetch_optional(&s.db).await.map_err(db)?.ok_or_else(||bad("Aktivnost ne postoji"))?;
- if !can_manage(&c,dept) {return Err(forbidden());}
+ guard_dept(&s,&c,dept,"manage").await?;
  if let Some(parent)=p.parent_id {
   let pd:Option<Uuid>=sqlx::query_scalar("SELECT department_id FROM activities WHERE id=$1").bind(parent).fetch_optional(&s.db).await.map_err(db)?;
   if pd!=Some(dept) {return Err(bad("Nadređena aktivnost mora biti u istom odjelu"));}
@@ -409,13 +505,13 @@ async fn move_activity(State(s):State<App>,h:HeaderMap,Path(id):Path<Uuid>,Json(
 }
 
 async fn department_docs(State(s):State<App>,h:HeaderMap,Query(p):Query<PeriodFilter>)->ResultApi<Json<Value>> {
- let c=who(&s,&h)?; if !can_read(&c,p.department_id) {return Err(forbidden());} check_period(p.year,p.month,&p.kind)?;
+ let c=who(&s,&h).await?; guard_dept(&s,&c,p.department_id,"read").await?; check_period(p.year,p.month,&p.kind)?;
  let row=sqlx::query("SELECT id,status,submitted_at FROM department_documents WHERE department_id=$1 AND year=$2 AND month=$3 AND kind=$4").bind(p.department_id).bind(p.year).bind(p.month).bind(p.kind).fetch_optional(&s.db).await.map_err(db)?;
  Ok(Json(match row {Some(r)=>json!({"id":r.get::<Uuid,_>("id"),"status":r.get::<String,_>("status"),"submitted_at":r.get::<Option<chrono::DateTime<Utc>>,_>("submitted_at")}),None=>json!({"status":"draft"})}))
 }
 #[derive(Deserialize)] struct SubmitDept {department_id:Uuid,year:i32,month:i32,kind:String,status:String}
 async fn save_department_doc(State(s):State<App>,h:HeaderMap,Json(p):Json<SubmitDept>)->ResultApi<Json<Value>> {
- let c=who(&s,&h)?; if !can_manage(&c,p.department_id) {return Err(forbidden());} check_period(p.year,p.month,&p.kind)?;
+ let c=who(&s,&h).await?; guard_dept(&s,&c,p.department_id,"manage").await?; check_period(p.year,p.month,&p.kind)?;
  if !["draft","submitted"].contains(&p.status.as_str()) {return Err(bad("Nevaljan status dokumenta"));}
  if p.status=="submitted" && p.kind=="report" {
   // Use the business-local calendar, independent of the server's configured timezone.
@@ -460,7 +556,7 @@ async fn save_department_doc(State(s):State<App>,h:HeaderMap,Json(p):Json<Submit
 
 #[derive(Deserialize)] struct VersionsFilter {department_id:Uuid,year:i32,month:i32,kind:String}
 async fn department_versions(State(s):State<App>,h:HeaderMap,Query(p):Query<VersionsFilter>)->ResultApi<Json<Value>> {
- let c=who(&s,&h)?;if !can_read(&c,p.department_id){return Err(forbidden());}check_period(p.year,p.month,&p.kind)?;
+ let c=who(&s,&h).await?;guard_dept(&s,&c,p.department_id,"read").await?;check_period(p.year,p.month,&p.kind)?;
  let rows=sqlx::query("SELECT v.id,v.version,v.snapshot,v.submitted_at,u.full_name AS author FROM department_document_versions v JOIN department_documents d ON d.id=v.department_document_id JOIN users u ON u.id=v.submitted_by WHERE d.department_id=$1 AND d.year=$2 AND d.month=$3 AND d.kind=$4 ORDER BY v.version DESC")
  .bind(p.department_id).bind(p.year).bind(p.month).bind(&p.kind).fetch_all(&s.db).await.map_err(db)?;
  Ok(Json(Value::Array(rows.iter().map(|r|json!({"id":r.get::<Uuid,_>("id"),"version":r.get::<i32,_>("version"),
@@ -472,7 +568,10 @@ async fn department_versions(State(s):State<App>,h:HeaderMap,Query(p):Query<Vers
 // are timestamped, append-only.
 
 async fn inbox(State(s):State<App>,h:HeaderMap)->ResultApi<Json<Value>> {
- let c=who(&s,&h)?;
+ let c=who(&s,&h).await?;
+ if !matches!(c.role.as_str(),"director"|"manager"|"employee"){return Err(forbidden());}
+ let sector=c.sector_id.ok_or_else(forbidden)?;
+ let dept=if director(&c){None}else{Some(c.department_id.ok_or_else(forbidden)?)};
  let rows=sqlx::query(r#"
  SELECT t.id,t.title,t.status,t.updated_at,a.id AS activity_id,a.title AS activity_title,
  d.name AS department_name,a.department_id,
@@ -481,9 +580,9 @@ async fn inbox(State(s):State<App>,h:HeaderMap)->ResultApi<Json<Value>> {
  FROM activity_thread_participants p
  JOIN activity_threads t ON t.id=p.thread_id
  JOIN activities a ON a.id=t.activity_id JOIN departments d ON d.id=a.department_id
- WHERE p.user_id=$1
+ WHERE p.user_id=$1 AND d.sector_id=$2 AND ($3::uuid IS NULL OR a.department_id=$3)
  ORDER BY t.updated_at DESC LIMIT 150
- "#).bind(c.sub).fetch_all(&s.db).await.map_err(db)?;
+ "#).bind(c.sub).bind(sector).bind(dept).fetch_all(&s.db).await.map_err(db)?;
  Ok(Json(Value::Array(rows.iter().map(|r|json!({
   "id":r.get::<Uuid,_>("id"),"title":r.get::<String,_>("title"),"status":r.get::<String,_>("status"),
   "activity_id":r.get::<Uuid,_>("activity_id"),"activity_title":r.get::<String,_>("activity_title"),
@@ -493,7 +592,8 @@ async fn inbox(State(s):State<App>,h:HeaderMap)->ResultApi<Json<Value>> {
  })).collect())))
 }
 async fn mark_thread_read(State(s):State<App>,h:HeaderMap,Path(id):Path<Uuid>)->ResultApi<Json<Value>> {
- let c=who(&s,&h)?;
+ let c=who(&s,&h).await?;
+ thread_access(&s,&c,id).await?;
  let member:bool=sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM activity_thread_participants WHERE thread_id=$1 AND user_id=$2)")
   .bind(id).bind(c.sub).fetch_one(&s.db).await.map_err(db)?;
  if !member{return Err(forbidden());}
@@ -505,10 +605,10 @@ async fn mark_thread_read(State(s):State<App>,h:HeaderMap,Path(id):Path<Uuid>)->
 }
 
 async fn activity_people(State(s):State<App>,h:HeaderMap,Path(id):Path<Uuid>)->ResultApi<Json<Value>> {
- let c=who(&s,&h)?;
+ let c=who(&s,&h).await?;
  let dept:Uuid=sqlx::query_scalar("SELECT department_id FROM activities WHERE id=$1").bind(id).fetch_optional(&s.db).await.map_err(db)?.ok_or_else(||bad("Aktivnost ne postoji"))?;
- if !can_read(&c,dept){return Err(forbidden());}
- let rows=sqlx::query("SELECT id,full_name,role FROM users WHERE active=true AND (department_id=$1 OR role IN ('director','admin')) ORDER BY full_name")
+ guard_dept(&s,&c,dept,"read").await?;
+ let rows=sqlx::query("SELECT id,full_name,role FROM users WHERE active=true AND (department_id=$1 OR (role='director' AND sector_id=(SELECT sector_id FROM departments WHERE id=$1))) ORDER BY full_name")
  .bind(dept).fetch_all(&s.db).await.map_err(db)?;
  Ok(Json(Value::Array(rows.iter().map(|r|json!({"id":r.get::<Uuid,_>("id"),"name":r.get::<String,_>("full_name"),"role":r.get::<String,_>("role")})).collect())))
 }
@@ -516,17 +616,18 @@ async fn thread_access(s:&App,c:&Claims,id:Uuid)->ResultApi<(Uuid,Uuid,bool)> {
  let row=sqlx::query("SELECT t.activity_id,a.department_id FROM activity_threads t JOIN activities a ON a.id=t.activity_id WHERE t.id=$1")
   .bind(id).fetch_optional(&s.db).await.map_err(db)?.ok_or_else(||bad("Razgovor ne postoji"))?;
  let a:Uuid=row.get("activity_id");let dept:Uuid=row.get("department_id");
- let supervisor=director(c)||(c.role=="manager"&&c.department_id==Some(dept));
+ guard_dept(s,c,dept,"read").await?;
+ let supervisor=(director(c))||(c.role=="manager"&&c.department_id==Some(dept));
  let member:bool=sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM activity_thread_participants WHERE thread_id=$1 AND user_id=$2)")
   .bind(id).bind(c.sub).fetch_one(&s.db).await.map_err(db)?;
  if !supervisor&&!member {return Err(forbidden());}
  Ok((a,dept,supervisor))
 }
 async fn threads_list(State(s):State<App>,h:HeaderMap,Path(activity_id):Path<Uuid>)->ResultApi<Json<Value>> {
- let c=who(&s,&h)?;
+ let c=who(&s,&h).await?;
  let dept:Uuid=sqlx::query_scalar("SELECT department_id FROM activities WHERE id=$1")
   .bind(activity_id).fetch_optional(&s.db).await.map_err(db)?.ok_or_else(||bad("Aktivnost ne postoji"))?;
- if !can_read(&c,dept){return Err(forbidden());}
+ guard_dept(&s,&c,dept,"read").await?;
  let supervisor=director(&c)||(c.role=="manager"&&c.department_id==Some(dept));
  let rows=sqlx::query("SELECT t.id,t.title,t.status,t.created_at,t.updated_at,u.full_name AS created_name, (SELECT COUNT(*) FROM activity_thread_messages m WHERE m.thread_id=t.id) AS message_count FROM activity_threads t JOIN users u ON u.id=t.created_by WHERE t.activity_id=$1 AND ($2 OR EXISTS(SELECT 1 FROM activity_thread_participants p WHERE p.thread_id=t.id AND p.user_id=$3)) ORDER BY t.updated_at DESC")
   .bind(activity_id).bind(supervisor).bind(c.sub).fetch_all(&s.db).await.map_err(db)?;
@@ -534,12 +635,12 @@ async fn threads_list(State(s):State<App>,h:HeaderMap,Path(activity_id):Path<Uui
 }
 #[derive(Deserialize)] struct StartThread {title:String,participants:Vec<Uuid>,message:Option<String>}
 async fn thread_create(State(s):State<App>,h:HeaderMap,Path(activity_id):Path<Uuid>,Json(p):Json<StartThread>)->ResultApi<Json<Value>> {
- let c=who(&s,&h)?;
+ let c=who(&s,&h).await?;
  let dept:Uuid=sqlx::query_scalar("SELECT department_id FROM activities WHERE id=$1").bind(activity_id).fetch_optional(&s.db).await.map_err(db)?.ok_or_else(||bad("Aktivnost ne postoji"))?;
- if !can_manage(&c,dept){return Err(forbidden());}
+ guard_dept(&s,&c,dept,"manage").await?;
  if p.title.trim().is_empty()||p.title.len()>250||p.participants.len()>30||p.message.as_ref().is_some_and(|m|m.len()>12000){return Err(bad("Nevaljan naziv, broj sudionika ili duljina poruke"));}
  let mut participants:HashSet<Uuid>=p.participants.into_iter().collect();participants.insert(c.sub);
- let count:i64=sqlx::query_scalar("SELECT COUNT(*) FROM users WHERE active=true AND id = ANY($1) AND (department_id=$2 OR role IN ('admin','director'))")
+ let count:i64=sqlx::query_scalar("SELECT COUNT(*) FROM users WHERE active=true AND id = ANY($1) AND (department_id=$2 OR (role='director' AND sector_id=(SELECT sector_id FROM departments WHERE id=$2)))")
   .bind(participants.iter().copied().collect::<Vec<_>>()).bind(dept).fetch_one(&s.db).await.map_err(db)?;
  if count!=participants.len() as i64{return Err(bad("Odabrani korisnik nema pristup ovom odjelu"));}
  let mut tx=s.db.begin().await.map_err(db)?;
@@ -561,7 +662,7 @@ async fn thread_create(State(s):State<App>,h:HeaderMap,Path(activity_id):Path<Uu
  Ok(Json(json!({"id":id})))
 }
 async fn thread_detail(State(s):State<App>,h:HeaderMap,Path(id):Path<Uuid>)->ResultApi<Json<Value>> {
- let c=who(&s,&h)?;thread_access(&s,&c,id).await?;
+ let c=who(&s,&h).await?;thread_access(&s,&c,id).await?;
  let t=sqlx::query("SELECT id,title,status,created_at,updated_at FROM activity_threads WHERE id=$1").bind(id).fetch_one(&s.db).await.map_err(db)?;
  let people=sqlx::query("SELECT p.user_id,u.full_name,p.added_at FROM activity_thread_participants p JOIN users u ON u.id=p.user_id WHERE p.thread_id=$1 ORDER BY u.full_name").bind(id).fetch_all(&s.db).await.map_err(db)?;
  let messages=sqlx::query("SELECT m.id,m.body,m.created_at,m.author_id,u.full_name AS author FROM activity_thread_messages m JOIN users u ON u.id=m.author_id WHERE m.thread_id=$1 ORDER BY m.created_at,m.id LIMIT 500").bind(id).fetch_all(&s.db).await.map_err(db)?;
@@ -575,7 +676,7 @@ async fn thread_detail(State(s):State<App>,h:HeaderMap,Path(id):Path<Uuid>)->Res
 }
 #[derive(Deserialize)] struct SendMessage {body:String}
 async fn thread_send(State(s):State<App>,h:HeaderMap,Path(id):Path<Uuid>,Json(p):Json<SendMessage>)->ResultApi<Json<Value>> {
- let c=who(&s,&h)?;thread_access(&s,&c,id).await?;
+ let c=who(&s,&h).await?;thread_access(&s,&c,id).await?;
  if p.body.trim().is_empty()||p.body.len()>12000{return Err(bad("Poruka mora sadržavati između 1 i 12000 znakova"));}
  let status:String=sqlx::query_scalar("SELECT status FROM activity_threads WHERE id=$1").bind(id).fetch_one(&s.db).await.map_err(db)?;
  if status=="done"{return Err(bad("Završeni razgovor prvo ponovno otvori"));}
@@ -588,8 +689,8 @@ async fn thread_send(State(s):State<App>,h:HeaderMap,Path(id):Path<Uuid>,Json(p)
 }
 #[derive(Deserialize)] struct ThreadParticipant {user_id:Uuid}
 async fn thread_add_person(State(s):State<App>,h:HeaderMap,Path(id):Path<Uuid>,Json(p):Json<ThreadParticipant>)->ResultApi<Json<Value>> {
- let c=who(&s,&h)?;let (_,dept,supervisor)=thread_access(&s,&c,id).await?;if !supervisor{return Err(forbidden());}
- let allowed:bool=sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM users WHERE id=$1 AND active=true AND (department_id=$2 OR role IN ('director','admin')))")
+ let c=who(&s,&h).await?;let (_,dept,supervisor)=thread_access(&s,&c,id).await?;if !supervisor{return Err(forbidden());}
+ let allowed:bool=sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM users WHERE id=$1 AND active=true AND (department_id=$2 OR (role='director' AND sector_id=(SELECT sector_id FROM departments WHERE id=$2))))")
  .bind(p.user_id).bind(dept).fetch_one(&s.db).await.map_err(db)?;
  if !allowed {return Err(bad("Korisnik nema pristup ovom odjelu"));}
  let mut tx=s.db.begin().await.map_err(db)?;
@@ -606,7 +707,7 @@ async fn thread_add_person(State(s):State<App>,h:HeaderMap,Path(id):Path<Uuid>,J
 }
 #[derive(Deserialize)] struct ThreadStatus {status:String}
 async fn thread_status(State(s):State<App>,h:HeaderMap,Path(id):Path<Uuid>,Json(p):Json<ThreadStatus>)->ResultApi<Json<Value>> {
- let c=who(&s,&h)?;let (_,_,supervisor)=thread_access(&s,&c,id).await?;if !supervisor{return Err(forbidden());}
+ let c=who(&s,&h).await?;let (_,_,supervisor)=thread_access(&s,&c,id).await?;if !supervisor{return Err(forbidden());}
  if !["open","done"].contains(&p.status.as_str()){return Err(bad("Nevaljan status"));}
  let mut tx=s.db.begin().await.map_err(db)?;
  sqlx::query("UPDATE activity_threads SET status=$2,updated_at=now() WHERE id=$1").bind(id).bind(&p.status).execute(&mut *tx).await.map_err(db)?;
@@ -616,24 +717,25 @@ async fn thread_status(State(s):State<App>,h:HeaderMap,Path(id):Path<Uuid>,Json(
 
 #[derive(Deserialize)] struct SectorFreshnessFilter {year:i32,month:i32,kind:String}
 async fn sector_freshness(State(s):State<App>,h:HeaderMap,Query(p):Query<SectorFreshnessFilter>)->ResultApi<Json<Value>> {
- let c=who(&s,&h)?;if !director(&c){return Err(forbidden());}check_period(p.year,p.month,&p.kind)?;
- let rows=sqlx::query("SELECT dd.department_id, COALESCE(MAX(v.version),0) AS version FROM department_documents dd LEFT JOIN department_document_versions v ON v.department_document_id=dd.id WHERE dd.year=$1 AND dd.month=$2 AND dd.kind=$3 GROUP BY dd.department_id")
- .bind(p.year).bind(p.month).bind(&p.kind).fetch_all(&s.db).await.map_err(db)?;
+ let c=who(&s,&h).await?;if !director(&c){return Err(forbidden());}check_period(p.year,p.month,&p.kind)?;
+ let sector=c.sector_id.ok_or_else(forbidden)?;
+ let rows=sqlx::query("SELECT dd.department_id, COALESCE(MAX(v.version),0) AS version FROM department_documents dd JOIN departments d ON d.id=dd.department_id LEFT JOIN department_document_versions v ON v.department_document_id=dd.id WHERE dd.year=$1 AND dd.month=$2 AND dd.kind=$3 AND d.sector_id=$4 GROUP BY dd.department_id")
+ .bind(p.year).bind(p.month).bind(&p.kind).bind(sector).fetch_all(&s.db).await.map_err(db)?;
  Ok(Json(Value::Array(rows.iter().map(|r|json!({"department_id":r.get::<Uuid,_>("department_id"),"version":r.get::<i64,_>("version")})).collect())))
 }
 #[derive(Deserialize)] struct SectorFilter {year:i32,month:i32,kind:String}
 async fn sector_docs(State(s):State<App>,h:HeaderMap,Query(p):Query<SectorFilter>)->ResultApi<Json<Value>> {
- let c=who(&s,&h)?; if !director(&c) {return Err(forbidden());} check_period(p.year,p.month,&p.kind)?;
- let rows=sqlx::query("SELECT id,title,status,revision,created_at,snapshot,introduction,conclusion FROM sector_documents WHERE year=$1 AND month=$2 AND kind=$3 ORDER BY revision DESC").bind(p.year).bind(p.month).bind(p.kind).fetch_all(&s.db).await.map_err(db)?;
+ let c=who(&s,&h).await?; if !director(&c) {return Err(forbidden());} check_period(p.year,p.month,&p.kind)?;
+ let rows=sqlx::query("SELECT id,title,status,revision,created_at,snapshot,introduction,conclusion FROM sector_documents WHERE year=$1 AND month=$2 AND kind=$3 AND sector_id=$4 ORDER BY revision DESC").bind(p.year).bind(p.month).bind(p.kind).bind(c.sector_id.ok_or_else(forbidden)?).fetch_all(&s.db).await.map_err(db)?;
  Ok(Json(Value::Array(rows.iter().map(|r|json!({"id":r.get::<Uuid,_>("id"),"title":r.get::<String,_>("title"),"status":r.get::<String,_>("status"),"revision":r.get::<i32,_>("revision"),"created_at":r.get::<chrono::DateTime<Utc>,_>("created_at"),"snapshot":r.get::<Value,_>("snapshot"),"introduction":r.get::<String,_>("introduction"),"conclusion":r.get::<String,_>("conclusion")})).collect())))
 }
 #[derive(Deserialize)] struct BuildSector {year:i32,month:i32,kind:String,department_ids:Vec<Uuid>,introduction:Option<String>,conclusion:Option<String>}
 async fn build_sector(State(s):State<App>,h:HeaderMap,Json(p):Json<BuildSector>)->ResultApi<Json<Value>> {
- let c=who(&s,&h)?; if !director(&c) {return Err(forbidden());} check_period(p.year,p.month,&p.kind)?;
+ let c=who(&s,&h).await?; if !director(&c) {return Err(forbidden());} check_period(p.year,p.month,&p.kind)?;
  if p.department_ids.is_empty() {return Err(bad("Odaberite barem jedan odjel"));}
  let mut sections=Vec::new();
  for dept_id in &p.department_ids {
-  let d=sqlx::query("SELECT name,code FROM departments WHERE id=$1").bind(dept_id).fetch_optional(&s.db).await.map_err(db)?.ok_or_else(||bad("Nepoznat odjel"))?;
+  let d=sqlx::query("SELECT name,code FROM departments WHERE id=$1 AND sector_id=$2").bind(dept_id).bind(c.sector_id.ok_or_else(forbidden)?).fetch_optional(&s.db).await.map_err(db)?.ok_or_else(||bad("Nepoznat odjel"))?;
   let accepted:Option<String>=sqlx::query_scalar("SELECT status FROM department_documents WHERE department_id=$1 AND year=$2 AND month=$3 AND kind=$4").bind(dept_id).bind(p.year).bind(p.month).bind(&p.kind).fetch_optional(&s.db).await.map_err(db)?;
   if accepted.as_deref()!=Some("submitted") {return Err(bad(format!("Odjel {} još nije predao dokument",d.get::<String,_>("name"))));}
   // A director must consume the submitted immutable snapshot, NOT live activities.
@@ -648,8 +750,8 @@ async fn build_sector(State(s):State<App>,h:HeaderMap,Json(p):Json<BuildSector>)
  }
  let title=format!("{} značajnijih aktivnosti za {:02}.{}.",if p.kind=="plan" {"PLAN"}else{"IZVJEŠĆE"},p.month,p.year);
  let snapshot=json!({"year":p.year,"month":p.month,"kind":p.kind,"title":title,"sections":sections});
- let revision:i32=sqlx::query_scalar("SELECT COALESCE(MAX(revision),0)+1 FROM sector_documents WHERE year=$1 AND month=$2 AND kind=$3").bind(p.year).bind(p.month).bind(&p.kind).fetch_one(&s.db).await.map_err(db)?;
- let id:Uuid=sqlx::query_scalar("INSERT INTO sector_documents(year,month,kind,title,introduction,conclusion,snapshot,revision,created_by) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING id").bind(p.year).bind(p.month).bind(&p.kind).bind(&title).bind(p.introduction.unwrap_or_default()).bind(p.conclusion.unwrap_or_default()).bind(snapshot).bind(revision).bind(c.sub).fetch_one(&s.db).await.map_err(db)?;
+ let revision:i32=sqlx::query_scalar("SELECT COALESCE(MAX(revision),0)+1 FROM sector_documents WHERE year=$1 AND month=$2 AND kind=$3 AND sector_id=$4").bind(p.year).bind(p.month).bind(&p.kind).bind(c.sector_id.ok_or_else(forbidden)?).fetch_one(&s.db).await.map_err(db)?;
+ let id:Uuid=sqlx::query_scalar("INSERT INTO sector_documents(year,month,kind,title,introduction,conclusion,snapshot,revision,created_by,sector_id) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING id").bind(p.year).bind(p.month).bind(&p.kind).bind(&title).bind(p.introduction.unwrap_or_default()).bind(p.conclusion.unwrap_or_default()).bind(snapshot).bind(revision).bind(c.sub).bind(c.sector_id.ok_or_else(forbidden)?).fetch_one(&s.db).await.map_err(db)?;
  audit(&s,&c,"sector.build",Some(id)).await; Ok(Json(json!({"id":id,"revision":revision})))
 }
 
@@ -657,8 +759,8 @@ async fn build_sector(State(s):State<App>,h:HeaderMap,Json(p):Json<BuildSector>)
 // or submitted department reports. Locked revisions stay immutable.
 #[derive(Deserialize)] struct EditSector {snapshot:Value,introduction:String,conclusion:String}
 async fn edit_sector(State(s):State<App>,h:HeaderMap,Path(id):Path<Uuid>,Json(p):Json<EditSector>)->ResultApi<Json<Value>> {
- let c=who(&s,&h)?; if !director(&c) {return Err(forbidden());}
- let row=sqlx::query("SELECT snapshot,status FROM sector_documents WHERE id=$1").bind(id).fetch_optional(&s.db).await.map_err(db)?.ok_or_else(||bad("Dokument nije pronađen"))?;
+ let c=who(&s,&h).await?; if !director(&c) {return Err(forbidden());}
+ let row=sqlx::query("SELECT snapshot,status FROM sector_documents WHERE id=$1 AND sector_id=$2").bind(id).bind(c.sector_id.ok_or_else(forbidden)?).fetch_optional(&s.db).await.map_err(db)?.ok_or_else(||bad("Dokument nije pronađen"))?;
  if row.get::<String,_>("status")!="draft" {return Err(bad("Zaključana revizija se ne može mijenjati"));}
  let old:Value=row.get("snapshot");
  let original=old.get("sections").and_then(Value::as_array).ok_or_else(||bad("Neispravan izvorni dokument"))?;
@@ -698,8 +800,8 @@ async fn edit_sector(State(s):State<App>,h:HeaderMap,Path(id):Path<Uuid>,Json(p)
  if new_sections.iter().all(|s| s.get("items").and_then(Value::as_array).map(|a|a.is_empty()).unwrap_or(true)) {return Err(bad("Završni dokument mora sadržavati barem jednu stavku"));}
  let mut snapshot=old; snapshot["sections"]=json!(new_sections);
  let mut tx=s.db.begin().await.map_err(db)?;
- let n=sqlx::query("UPDATE sector_documents SET snapshot=$2,introduction=$3,conclusion=$4 WHERE id=$1 AND status='draft'")
-  .bind(id).bind(&snapshot).bind(&p.introduction).bind(&p.conclusion).execute(&mut *tx).await.map_err(db)?.rows_affected();
+ let n=sqlx::query("UPDATE sector_documents SET snapshot=$2,introduction=$3,conclusion=$4 WHERE id=$1 AND status='draft' AND sector_id=$5")
+  .bind(id).bind(&snapshot).bind(&p.introduction).bind(&p.conclusion).bind(c.sector_id.ok_or_else(forbidden)?).execute(&mut *tx).await.map_err(db)?.rows_affected();
  if n==0 {return Err(bad("Dokument je u međuvremenu zaključan"));}
  sqlx::query("INSERT INTO sector_document_edits(sector_document_id,snapshot,introduction,conclusion,edited_by) VALUES($1,$2,$3,$4,$5)")
   .bind(id).bind(snapshot).bind(&p.introduction).bind(&p.conclusion).bind(c.sub).execute(&mut *tx).await.map_err(db)?;
@@ -708,15 +810,15 @@ async fn edit_sector(State(s):State<App>,h:HeaderMap,Path(id):Path<Uuid>,Json(p)
 }
 
 async fn lock_sector(State(s):State<App>,h:HeaderMap,Path(id):Path<Uuid>)->ResultApi<Json<Value>> {
- let c=who(&s,&h)?; if !director(&c) {return Err(forbidden());}
- let n=sqlx::query("UPDATE sector_documents SET status='locked',locked_at=now() WHERE id=$1 AND status='draft'").bind(id).execute(&s.db).await.map_err(db)?.rows_affected();
+ let c=who(&s,&h).await?; if !director(&c) {return Err(forbidden());}
+ let n=sqlx::query("UPDATE sector_documents SET status='locked',locked_at=now() WHERE id=$1 AND status='draft' AND sector_id=$2").bind(id).bind(c.sector_id.ok_or_else(forbidden)?).execute(&s.db).await.map_err(db)?.rows_affected();
  if n==0 {return Err(bad("Dokument nije nacrt ili ne postoji"));} audit(&s,&c,"sector.lock",Some(id)).await;
  Ok(Json(json!({"ok":true})))
 }
 async fn export_doc(State(s):State<App>,h:HeaderMap,Path((id,format)):Path<(Uuid,String)>)->ResultApi<Response> {
- let c=who(&s,&h)?; if !director(&c) {return Err(forbidden());}
+ let c=who(&s,&h).await?; if !director(&c) {return Err(forbidden());}
  if format!="docx" && format!="pdf" {return Err(bad("Nepodržani format"));}
- let r=sqlx::query("SELECT title,introduction,conclusion,snapshot,revision FROM sector_documents WHERE id=$1").bind(id).fetch_optional(&s.db).await.map_err(db)?.ok_or_else(||bad("Nepostojeći dokument"))?;
+ let r=sqlx::query("SELECT title,introduction,conclusion,snapshot,revision FROM sector_documents WHERE id=$1 AND sector_id=$2").bind(id).bind(c.sector_id.ok_or_else(forbidden)?).fetch_optional(&s.db).await.map_err(db)?.ok_or_else(||bad("Nepostojeći dokument"))?;
  let payload=json!({"title":r.get::<String,_>("title"),"introduction":r.get::<String,_>("introduction"),"conclusion":r.get::<String,_>("conclusion"),"snapshot":r.get::<Value,_>("snapshot")});
  let resp=s.client.post(format!("{}/render/{}",s.doc_url,format)).json(&payload).send().await.map_err(|e|ErrApi(StatusCode::BAD_GATEWAY,e.to_string()))?;
  if !resp.status().is_success() {return Err(ErrApi(StatusCode::BAD_GATEWAY,resp.text().await.unwrap_or_default()));}
@@ -740,7 +842,9 @@ async fn health()->Json<Value> {Json(json!({"status":"ok"}))}
  let app=App{db,secret:Arc::new(secret),doc_url:env::var("DOC_SERVICE_URL").unwrap_or("http://documents:8081".into()),client:reqwest::Client::new()};
  let routes=Router::new()
   .route("/api/health",get(health)).route("/api/auth/login",post(login)).route("/api/auth/me",get(me))
-  .route("/api/departments",get(departments)).route("/api/users",get(users).post(create_user))
+  .route("/api/sectors",get(sectors).post(create_sector))
+  .route("/api/departments",get(departments).post(create_department))
+  .route("/api/users",get(users).post(create_user)).route("/api/users/{id}",patch(update_user))
   .route("/api/dashboard",get(dashboard))
   .route("/api/activities",get(activities).post(create_activity)).route("/api/activities/{id}",patch(edit_activity))
   .route("/api/activity-search",get(search_activities))
