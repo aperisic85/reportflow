@@ -14,7 +14,7 @@ export default function OrganizationAdmin({user,onLogout}:{user:User;onLogout:()
  useEffect(()=>{void refresh().catch(e=>setError(String(e)));},[refresh]);
  const perform=async(f:()=>Promise<unknown>)=>{setBusy(true);setError('');setNotice('');try{await f();await refresh();setNotice('Promjene su spremljene.');}catch(e){setError(e instanceof Error?e.message:String(e));}finally{setBusy(false);}};
  const beginNew=()=>{setEditing(null);setIsCreating(true);setLogin('');setDetails({full_name:'',role:'employee',sector_id:sectors[0]?.id??'',department_id:'',active:true,password:''});};
- const edit=(p:Person)=>{setEditing(p.id);setIsCreating(false);setDetails(initial(p));};
+ const edit=(p:Person)=>{setEditing(p.id);setIsCreating(false);setLogin(p.username);setDetails(initial(p));};
  const adminOptions=user.role==='admin'?[{value:'admin',label:'Mega admin'},...roles]:roles;
  const availableDepts=departments.filter(d=>d.sector_id===details.sector_id);
  const chooseRole=(role:string)=>setDetails(d=>({...d,role,sector_id:role==='admin'||role==='org_admin'?'':d.sector_id||sectors[0]?.id||'',department_id:role==='manager'||role==='employee'?d.department_id:''}));
@@ -22,7 +22,7 @@ export default function OrganizationAdmin({user,onLogout}:{user:User;onLogout:()
   const sector_id=['admin','org_admin'].includes(details.role)?null:(details.sector_id||null);
   const department_id=['manager','employee'].includes(details.role)?details.department_id||null:null;
   if(isCreating){await post('/users',{username:login,full_name:details.full_name,password:details.password,role:details.role,sector_id,department_id});}
-  else if(editing){await patch('/users/'+editing,{full_name:details.full_name,role:details.role,sector_id,department_id,active:details.active,password:details.password||null});}
+  else if(editing){await patch('/users/'+editing,{username:login,full_name:details.full_name,role:details.role,sector_id,department_id,active:details.active,password:details.password||null});}
   setIsCreating(false);setEditing(null);setDetails(d=>({...d,password:''}));
  });
  return <div className="org-shell">
@@ -43,10 +43,10 @@ export default function OrganizationAdmin({user,onLogout}:{user:User;onLogout:()
      <label>Naziv odjela<input required value={newDept.name} onChange={e=>setNewDept({...newDept,name:e.target.value})}/></label>
      <button className="primary" disabled={busy}>Dodaj odjel</button></form></section>}
    {tab==='users'&&<section className="panel org-panel"><div className="org-heading"><h2>Korisnici</h2><button className="primary" type="button" onClick={beginNew}>+ Novi korisnik</button></div>
-    <div className="org-list">{users.map(p=><div key={p.id}><span><strong>{p.full_name}</strong><small>{p.username} · {p.role==='admin'?'Mega admin':roles.find(r=>r.value===p.role)?.label??p.role} · {p.active?'Aktivan':'Neaktivan'}{p.sector_id?' · '+(sectors.find(s=>s.id===p.sector_id)?.name??'Sektor'):''}{p.department_id?' / '+(departments.find(d=>d.id===p.department_id)?.name??'Odjel'):''}</small></span><button type="button" className="outline" onClick={()=>edit(p)}>Uredi</button></div>)}</div>
+    <div className="org-list">{users.map(p=><div key={p.id}><span><strong>{p.full_name}</strong><small>{p.username} · {p.role==='admin'?'Mega admin':roles.find(r=>r.value===p.role)?.label??p.role} · {p.active?'Aktivan':'Neaktivan'}{p.sector_id?' · '+(sectors.find(s=>s.id===p.sector_id)?.name??'Sektor'):''}{p.department_id?' / '+(departments.find(d=>d.id===p.department_id)?.name??'Odjel'):''}</small></span>{(user.role==='admin'||p.role!=='admin')&&<button type="button" className="outline" onClick={()=>edit(p)}>Uredi</button>}</div>)}</div>
     {(isCreating||editing)&&<form className="org-edit" onSubmit={e=>{e.preventDefault();void savePerson();}}>
      <h3>{isCreating?'Novi korisnik':'Uredi korisnika'}</h3>
-     {isCreating&&<label>Korisničko ime<input required value={login} onChange={e=>setLogin(e.target.value)}/></label>}
+     <label>Korisničko ime<input required maxLength={100} value={login} onChange={e=>setLogin(e.target.value)}/></label>
      <label>Ime i prezime<input required value={details.full_name} onChange={e=>setDetails({...details,full_name:e.target.value})}/></label>
      <label>Uloga<select value={details.role} onChange={e=>chooseRole(e.target.value)}>{adminOptions.map(r=><option key={r.value} value={r.value}>{r.label}</option>)}</select></label>
      {!['admin','org_admin'].includes(details.role)&&<label>Sektor<select value={details.sector_id} required onChange={e=>setDetails({...details,sector_id:e.target.value,department_id:''})}><option value="">Odaberi sektor</option>{sectors.map(s=><option key={s.id} value={s.id}>{s.name}</option>)}</select></label>}
