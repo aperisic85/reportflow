@@ -2,7 +2,8 @@ use std::{env, sync::Arc, collections::HashSet};
 use argon2::{Argon2, PasswordHash, PasswordHasher, PasswordVerifier};
 use argon2::password_hash::SaltString;
 use axum::{body::Body, extract::{Path, Query, State}, http::{header, HeaderMap, StatusCode}, response::{IntoResponse, Response}, routing::{get, post, patch}, Json, Router};
-use chrono::Utc;
+use chrono::{Utc,DateTime};
+use sha2::{Sha256,Digest};
 use jsonwebtoken::{decode, encode, DecodingKey, EncodingKey, Header, Validation};
 use rand_core::OsRng;
 use serde::{Deserialize, Serialize};
@@ -11,7 +12,7 @@ use sqlx::{postgres::PgPoolOptions, PgPool, Row};
 use tower_http::{cors::{Any, CorsLayer}, trace::TraceLayer};
 use uuid::Uuid;
 
-#[derive(Clone)] struct App { db: PgPool, secret: Arc<String>, doc_url: String, client: reqwest::Client }
+#[derive(Clone)] struct App { db: PgPool, secret: Arc<String>, doc_url: String, verify_base_url: String, client: reqwest::Client }
 #[derive(Debug)] struct ErrApi(StatusCode, String);
 impl IntoResponse for ErrApi { fn into_response(self)->Response { (self.0, Json(json!({"error":self.1}))).into_response() } }
 type ResultApi<T> = Result<T,ErrApi>;
@@ -815,11 +816,92 @@ async fn edit_sector(State(s):State<App>,h:HeaderMap,Path(id):Path<Uuid>,Json(p)
  audit(&s,&c,"sector.edit",Some(id)).await;Ok(Json(json!({"ok":true})))
 }
 
-async fn lock_sector(State(s):State<App>,h:HeaderMap,Path(id):Path<Uuid>)->ResultApi<Json<Value>> {
- let c=who(&s,&h).await?; if !director(&c) {return Err(forbidden());}
- let n=sqlx::query("UPDATE sector_documents SET status='locked',locked_at=now() WHERE id=$1 AND status='draft' AND sector_id=$2").bind(id).bind(c.sector_id.ok_or_else(forbidden)?).execute(&s.db).await.map_err(db)?.rows_affected();
- if n==0 {return Err(bad("Dokument nije nacrt ili ne postoji"));} audit(&s,&c,"sector.lock",Some(id)).await;
- Ok(Json(json!({"ok":true})))
+// The legacy lock route must not create unsigned/unauditable "final" documents.
+async fn lock_sector(State(_s):State<App>,_h:HeaderMap,Path(_id):Path<Uuid>)->ResultApi<Json<Value>> {
+ Err(bad("Koristite 'Odobri i arhiviraj' uz potvrdu lozinkom"))
+}
+#[derive(Deserialize)]
+struct ApproveSector {password:String}
+async fn approve_sector(State(s):State<App>,h:HeaderMap,Path(id):Path<Uuid>,Json(p):Json<ApproveSector>)->ResultApi<Json<Value>> {
+ let c=who(&s,&h).await?;
+ if !director(&c){return Err(forbidden());}
+ if p.password.is_empty(){return Err(bad("Za odobravanje je potrebna potvrda lozinkom"));}
+ if s.verify_base_url.is_empty() ||
+    !(s.verify_base_url.starts_with("https://") || s.verify_base_url.starts_with("http://localhost:") ||
+      s.verify_base_url.starts_with("http://127.0.0.1:")) {
+  return Err(ErrApi(StatusCode::SERVICE_UNAVAILABLE,"Postavite VERIFY_BASE_URL na HTTPS adresu aplikacije".into()));
+ }
+ let password_hash:String=sqlx::query_scalar("SELECT password_hash FROM users WHERE id=$1 AND active=true")
+  .bind(c.sub).fetch_one(&s.db).await.map_err(db)?;
+ let verified=PasswordHash::new(&password_hash).ok()
+  .map(|ph|Argon2::default().verify_password(p.password.as_bytes(),&ph).is_ok()).unwrap_or(false);
+ if !verified{return Err(ErrApi(StatusCode::UNAUTHORIZED,"Neispravna lozinka za odobravanje".into()));}
+ let sector_id=c.sector_id.ok_or_else(forbidden)?;
+ let mut tx=s.db.begin().await.map_err(db)?;
+ // Row lock serializes approval and concurrent draft editing.
+ let row=sqlx::query("SELECT d.title,d.introduction,d.conclusion,d.snapshot,d.revision,d.year,d.month,d.kind,d.status,sec.code,u.full_name AS approver FROM sector_documents d JOIN sectors sec ON sec.id=d.sector_id JOIN users u ON u.id=$3 WHERE d.id=$1 AND d.sector_id=$2 FOR UPDATE OF d")
+  .bind(id).bind(sector_id).bind(c.sub).fetch_optional(&mut *tx).await.map_err(db)?
+  .ok_or_else(||bad("Dokument nije pronađen"))?;
+ let status:String=row.get("status");
+ if status!="draft" {return Err(bad("Odobriti se može samo nacrt koji još nije arhiviran"));}
+ let year:i32=row.get("year");let month:i32=row.get("month");
+ let kind:String=row.get("kind");
+ let revision:i32=row.get("revision");
+ let sector_code:String=row.get("code");
+ let number=format!("RF-{}-{:04}-{:02}-{}-v{}",sector_code,year,month,if kind=="plan"{"P"}else{"I"},revision);
+ let token=Uuid::new_v4();
+ let approved_at:DateTime<Utc>=sqlx::query_scalar("SELECT clock_timestamp()").fetch_one(&mut *tx).await.map_err(db)?;
+ let verify_url=format!("{}/verify/{}",s.verify_base_url,token);
+ let payload=json!({
+  "title":row.get::<String,_>("title"),"introduction":row.get::<String,_>("introduction"),
+  "conclusion":row.get::<String,_>("conclusion"),"snapshot":row.get::<Value,_>("snapshot"),
+  "approval":{"document_number":number,"approved_by":row.get::<String,_>("approver"),
+   "approved_at":approved_at.to_rfc3339(),"verification_url":verify_url}
+ });
+ // Render exactly once, before recording the immutable hash. Use original ISO letterhead.
+ let resp=s.client.post(format!("{}/render/modern-letterhead-pdf",s.doc_url))
+  .json(&payload).send().await.map_err(|e|ErrApi(StatusCode::BAD_GATEWAY,e.to_string()))?;
+ if !resp.status().is_success() {
+  return Err(ErrApi(StatusCode::BAD_GATEWAY,format!("PDF renderer: {}",resp.text().await.unwrap_or_default())));
+ }
+ let bytes=resp.bytes().await.map_err(|e|ErrApi(StatusCode::BAD_GATEWAY,e.to_string()))?;
+ if bytes.len()<5 || !bytes.starts_with(b"%PDF-") {return Err(ErrApi(StatusCode::BAD_GATEWAY,"Renderer nije vratio valjani PDF".into()));}
+ if bytes.len()>40_000_000{return Err(bad("PDF je prevelik za arhiviranje"));}
+ let digest=format!("{:x}",Sha256::digest(&bytes));
+ sqlx::query("INSERT INTO sector_document_approvals(sector_document_id,verification_token,document_number,approved_by,approved_at,pdf_sha256,pdf_bytes,pdf_size) VALUES($1,$2,$3,$4,$5,$6,$7,$8)")
+  .bind(id).bind(token).bind(&number).bind(c.sub).bind(approved_at).bind(&digest)
+  .bind(bytes.as_ref()).bind(bytes.len() as i64).execute(&mut *tx).await.map_err(db)?;
+ let count=sqlx::query("UPDATE sector_documents SET status='approved',locked_at=$2 WHERE id=$1 AND status='draft'")
+  .bind(id).bind(approved_at).execute(&mut *tx).await.map_err(db)?.rows_affected();
+ if count!=1{return Err(bad("Dokument više nije nacrt"));}
+ tx.commit().await.map_err(db)?;
+ audit(&s,&c,"sector.approve",Some(id)).await;
+ Ok(Json(json!({"document_number":number,"verification_token":token,"pdf_sha256":digest,
+  "approved_at":approved_at,"status":"approved"})))
+}
+
+async fn verify_approval(State(s):State<App>,Path(token):Path<Uuid>)->ResultApi<Json<Value>> {
+ let row=sqlx::query("SELECT a.document_number,a.approved_at,a.pdf_sha256,a.pdf_size,a.approval_method,d.revision,d.year,d.month,d.kind,sec.name AS sector_name,u.full_name AS approver FROM sector_document_approvals a JOIN sector_documents d ON d.id=a.sector_document_id JOIN sectors sec ON sec.id=d.sector_id JOIN users u ON u.id=a.approved_by WHERE a.verification_token=$1 AND d.status='approved'")
+  .bind(token).fetch_optional(&s.db).await.map_err(db)?
+  .ok_or_else(||ErrApi(StatusCode::NOT_FOUND,"Dokument nije pronađen".into()))?;
+ Ok(Json(json!({"valid":true,"document_number":row.get::<String,_>("document_number"),
+  "sector":row.get::<String,_>("sector_name"),"year":row.get::<i32,_>("year"),
+  "month":row.get::<i32,_>("month"),"kind":row.get::<String,_>("kind"),
+  "revision":row.get::<i32,_>("revision"),"approved_at":row.get::<DateTime<Utc>,_>("approved_at"),
+  "approved_by":row.get::<String,_>("approver"),"pdf_sha256":row.get::<String,_>("pdf_sha256"),
+  "pdf_size":row.get::<i64,_>("pdf_size"),"approval_method":row.get::<String,_>("approval_method"),
+  "notice":"Interno elektroničko odobrenje, nije kvalificirani elektronički potpis."})))
+}
+async fn archived_pdf(State(s):State<App>,h:HeaderMap,Path(id):Path<Uuid>)->ResultApi<Response> {
+ let c=who(&s,&h).await?;if !director(&c){return Err(forbidden());}
+ let row=sqlx::query("SELECT a.pdf_bytes,a.document_number FROM sector_document_approvals a JOIN sector_documents d ON d.id=a.sector_document_id WHERE d.id=$1 AND d.sector_id=$2 AND d.status='approved'")
+ .bind(id).bind(c.sector_id.ok_or_else(forbidden)?).fetch_optional(&s.db).await.map_err(db)?
+ .ok_or_else(||bad("Arhivirani odobreni PDF nije pronađen"))?;
+ let bytes:Vec<u8>=row.get("pdf_bytes");
+ let name:String=row.get("document_number");
+ Ok(Response::builder().status(StatusCode::OK).header(header::CONTENT_TYPE,"application/pdf")
+  .header(header::CONTENT_DISPOSITION,format!("attachment; filename=\"{}.pdf\"",name))
+  .header(header::CACHE_CONTROL,"no-store").body(Body::from(bytes)).unwrap())
 }
 async fn export_doc(State(s):State<App>,h:HeaderMap,Path((id,format)):Path<(Uuid,String)>)->ResultApi<Response> {
  let c=who(&s,&h).await?; if !director(&c) {return Err(forbidden());}
@@ -845,7 +927,8 @@ async fn health()->Json<Value> {Json(json!({"status":"ok"}))}
   let exists:bool=sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM users WHERE username=$1)").bind(&user).fetch_one(&db).await?;
   if !exists { sqlx::query("INSERT INTO users(username,full_name,password_hash,role) VALUES($1,'Administrator',$2,'admin')").bind(user).bind(hash(&pass).map_err(|e|anyhow::anyhow!(e.1))?).execute(&db).await?; }
  }
- let app=App{db,secret:Arc::new(secret),doc_url:env::var("DOC_SERVICE_URL").unwrap_or("http://documents:8081".into()),client:reqwest::Client::new()};
+ let verify_base_url=env::var("VERIFY_BASE_URL").unwrap_or_default().trim_end_matches('/').to_string();
+ let app=App{db,secret:Arc::new(secret),doc_url:env::var("DOC_SERVICE_URL").unwrap_or("http://documents:8081".into()),verify_base_url,client:reqwest::Client::new()};
  let routes=Router::new()
   .route("/api/health",get(health)).route("/api/auth/login",post(login)).route("/api/auth/me",get(me))
   .route("/api/sectors",get(sectors).post(create_sector))
@@ -877,6 +960,9 @@ async fn health()->Json<Value> {Json(json!({"status":"ok"}))}
   .route("/api/sector-documents",get(sector_docs).post(build_sector))
   .route("/api/sector-documents/{id}",patch(edit_sector))
   .route("/api/sector-documents/{id}/lock",post(lock_sector))
+  .route("/api/sector-documents/{id}/approve",post(approve_sector))
+  .route("/api/sector-documents/{id}/archived-pdf",get(archived_pdf))
+  .route("/api/verify/{token}",get(verify_approval))
   .route("/api/sector-documents/{id}/export/{format}",get(export_doc))
   .with_state(app).layer(CorsLayer::new().allow_origin(Any).allow_methods(Any).allow_headers(Any)).layer(TraceLayer::new_for_http());
  let listener=tokio::net::TcpListener::bind("0.0.0.0:8095").await?;
