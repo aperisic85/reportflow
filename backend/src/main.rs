@@ -603,7 +603,7 @@ async fn activity_people(State(s):State<App>,h:HeaderMap,Path(id):Path<Uuid>)->R
  let c=who(&s,&h)?;
  let dept:Uuid=sqlx::query_scalar("SELECT department_id FROM activities WHERE id=$1").bind(id).fetch_optional(&s.db).await.map_err(db)?.ok_or_else(||bad("Aktivnost ne postoji"))?;
  guard_dept(&s,&c,dept,"read").await?;
- let rows=sqlx::query("SELECT id,full_name,role FROM users WHERE active=true AND (department_id=$1 OR role IN ('director','admin')) ORDER BY full_name")
+ let rows=sqlx::query("SELECT id,full_name,role FROM users WHERE active=true AND (department_id=$1 OR (role='director' AND sector_id=(SELECT sector_id FROM departments WHERE id=$1))) ORDER BY full_name")
  .bind(dept).fetch_all(&s.db).await.map_err(db)?;
  Ok(Json(Value::Array(rows.iter().map(|r|json!({"id":r.get::<Uuid,_>("id"),"name":r.get::<String,_>("full_name"),"role":r.get::<String,_>("role")})).collect())))
 }
@@ -611,7 +611,8 @@ async fn thread_access(s:&App,c:&Claims,id:Uuid)->ResultApi<(Uuid,Uuid,bool)> {
  let row=sqlx::query("SELECT t.activity_id,a.department_id FROM activity_threads t JOIN activities a ON a.id=t.activity_id WHERE t.id=$1")
   .bind(id).fetch_optional(&s.db).await.map_err(db)?.ok_or_else(||bad("Razgovor ne postoji"))?;
  let a:Uuid=row.get("activity_id");let dept:Uuid=row.get("department_id");
- let supervisor=director(c)||(c.role=="manager"&&c.department_id==Some(dept));
+ guard_dept(s,c,dept,"read").await?;
+ let supervisor=(director(c))||(c.role=="manager"&&c.department_id==Some(dept));
  let member:bool=sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM activity_thread_participants WHERE thread_id=$1 AND user_id=$2)")
   .bind(id).bind(c.sub).fetch_one(&s.db).await.map_err(db)?;
  if !supervisor&&!member {return Err(forbidden());}
@@ -634,7 +635,7 @@ async fn thread_create(State(s):State<App>,h:HeaderMap,Path(activity_id):Path<Uu
  guard_dept(&s,&c,dept,"manage").await?;
  if p.title.trim().is_empty()||p.title.len()>250||p.participants.len()>30||p.message.as_ref().is_some_and(|m|m.len()>12000){return Err(bad("Nevaljan naziv, broj sudionika ili duljina poruke"));}
  let mut participants:HashSet<Uuid>=p.participants.into_iter().collect();participants.insert(c.sub);
- let count:i64=sqlx::query_scalar("SELECT COUNT(*) FROM users WHERE active=true AND id = ANY($1) AND (department_id=$2 OR role IN ('admin','director'))")
+ let count:i64=sqlx::query_scalar("SELECT COUNT(*) FROM users WHERE active=true AND id = ANY($1) AND (department_id=$2 OR (role='director' AND sector_id=(SELECT sector_id FROM departments WHERE id=$2)))")
   .bind(participants.iter().copied().collect::<Vec<_>>()).bind(dept).fetch_one(&s.db).await.map_err(db)?;
  if count!=participants.len() as i64{return Err(bad("Odabrani korisnik nema pristup ovom odjelu"));}
  let mut tx=s.db.begin().await.map_err(db)?;
@@ -684,7 +685,7 @@ async fn thread_send(State(s):State<App>,h:HeaderMap,Path(id):Path<Uuid>,Json(p)
 #[derive(Deserialize)] struct ThreadParticipant {user_id:Uuid}
 async fn thread_add_person(State(s):State<App>,h:HeaderMap,Path(id):Path<Uuid>,Json(p):Json<ThreadParticipant>)->ResultApi<Json<Value>> {
  let c=who(&s,&h)?;let (_,dept,supervisor)=thread_access(&s,&c,id).await?;if !supervisor{return Err(forbidden());}
- let allowed:bool=sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM users WHERE id=$1 AND active=true AND (department_id=$2 OR role IN ('director','admin')))")
+ let allowed:bool=sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM users WHERE id=$1 AND active=true AND (department_id=$2 OR (role='director' AND sector_id=(SELECT sector_id FROM departments WHERE id=$2))))")
  .bind(p.user_id).bind(dept).fetch_one(&s.db).await.map_err(db)?;
  if !allowed {return Err(bad("Korisnik nema pristup ovom odjelu"));}
  let mut tx=s.db.begin().await.map_err(db)?;
