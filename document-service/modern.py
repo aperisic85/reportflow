@@ -5,6 +5,8 @@ the existing LibreOffice renderer. The ISO DOCX/PDF template is not touched.
 """
 from datetime import datetime, timezone
 from io import BytesIO
+from docx.shared import Inches
+import qrcode
 from pathlib import Path
 
 from docx import Document
@@ -68,7 +70,7 @@ def paragraph(doc, text="", *, size=10, color=INK, after=7, bold=False):
     return p
 
 
-def populate_modern(payload, memorandum=False):
+def populate_modern(payload, memorandum=False, approval=None):
     if memorandum:
         # Copy the *actual ISO template* into this document and only replace
         # the main body; section headers/footers, logo and page setup survive.
@@ -186,6 +188,34 @@ def populate_modern(payload, memorandum=False):
         heading.paragraph_format.space_before = Pt(18)
         line(heading, color="D8CAB8", size=6)
         paragraph(doc, payload.conclusion.strip(), size=10, after=13)
+
+    if approval is not None:
+        # This is explicitly an INTERNAL approval record, NOT a PAdES signature.
+        if not isinstance(approval, dict) or not all(approval.get(k) for k in
+                ("document_number", "approved_by", "approved_at", "verification_url")):
+            raise ValueError("Incomplete approval metadata")
+        panel = doc.add_paragraph()
+        panel.paragraph_format.space_before = Pt(18)
+        panel.paragraph_format.keep_with_next = True
+        write_run(panel, "INTERNO ELEKTRONIČKI ODOBRENO", bold=True, color=AMBER, size=11)
+        line(panel, color="D8CAB8", size=6)
+        paragraph(doc, f"Dokument: {approval['document_number']}", size=9, after=3)
+        paragraph(doc, f"Odobrio/la: {approval['approved_by']}", size=9, after=3)
+        paragraph(doc, f"Vrijeme odobrenja (UTC): {approval['approved_at']}", size=9, after=5)
+        paragraph(doc, "Ovo je interno odobravanje u sustavu ReportFlow, a ne kvalificirani elektronički potpis.",
+                  size=8, color=MUTED, after=7)
+        qr = qrcode.QRCode(error_correction=qrcode.constants.ERROR_CORRECT_M,
+                           box_size=6, border=2)
+        qr.add_data(str(approval["verification_url"]))
+        qr.make(fit=True)
+        image = BytesIO()
+        qr.make_image(fill_color="black", back_color="white").save(image, format="PNG")
+        image.seek(0)
+        img_paragraph = doc.add_paragraph()
+        img_paragraph.paragraph_format.keep_together = True
+        img_paragraph.add_run().add_picture(image, width=Cm(2.8))
+        paragraph(doc, "Skenirajte QR kod za provjeru izvornog arhiviranog PDF-a.", size=8,
+                  color=MUTED, after=10)
 
     p = doc.add_paragraph()
     p.paragraph_format.space_before = Pt(17)
