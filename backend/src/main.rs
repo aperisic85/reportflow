@@ -860,7 +860,7 @@ async fn approve_sector(State(s):State<App>,h:HeaderMap,Path(id):Path<Uuid>,Json
  });
  // Render exactly once, before recording the immutable hash. Use original ISO letterhead.
  let resp=s.client.post(format!("{}/render/modern-letterhead-pdf",s.doc_url))
-  .json(&payload).send().await.map_err(|e|ErrApi(StatusCode::BAD_GATEWAY,e.to_string()))?;
+  .timeout(std::time::Duration::from_secs(125)).json(&payload).send().await.map_err(|e|ErrApi(StatusCode::BAD_GATEWAY,e.to_string()))?;
  if !resp.status().is_success() {
   return Err(ErrApi(StatusCode::BAD_GATEWAY,format!("PDF renderer: {}",resp.text().await.unwrap_or_default())));
  }
