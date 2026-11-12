@@ -713,14 +713,15 @@ async fn thread_status(State(s):State<App>,h:HeaderMap,Path(id):Path<Uuid>,Json(
 #[derive(Deserialize)] struct SectorFreshnessFilter {year:i32,month:i32,kind:String}
 async fn sector_freshness(State(s):State<App>,h:HeaderMap,Query(p):Query<SectorFreshnessFilter>)->ResultApi<Json<Value>> {
  let c=who(&s,&h)?;if !director(&c){return Err(forbidden());}check_period(p.year,p.month,&p.kind)?;
- let rows=sqlx::query("SELECT dd.department_id, COALESCE(MAX(v.version),0) AS version FROM department_documents dd LEFT JOIN department_document_versions v ON v.department_document_id=dd.id WHERE dd.year=$1 AND dd.month=$2 AND dd.kind=$3 GROUP BY dd.department_id")
- .bind(p.year).bind(p.month).bind(&p.kind).fetch_all(&s.db).await.map_err(db)?;
+ let sector=c.sector_id.ok_or_else(forbidden)?;
+ let rows=sqlx::query("SELECT dd.department_id, COALESCE(MAX(v.version),0) AS version FROM department_documents dd JOIN departments d ON d.id=dd.department_id LEFT JOIN department_document_versions v ON v.department_document_id=dd.id WHERE dd.year=$1 AND dd.month=$2 AND dd.kind=$3 AND d.sector_id=$4 GROUP BY dd.department_id")
+ .bind(p.year).bind(p.month).bind(&p.kind).bind(sector).fetch_all(&s.db).await.map_err(db)?;
  Ok(Json(Value::Array(rows.iter().map(|r|json!({"department_id":r.get::<Uuid,_>("department_id"),"version":r.get::<i64,_>("version")})).collect())))
 }
 #[derive(Deserialize)] struct SectorFilter {year:i32,month:i32,kind:String}
 async fn sector_docs(State(s):State<App>,h:HeaderMap,Query(p):Query<SectorFilter>)->ResultApi<Json<Value>> {
  let c=who(&s,&h)?; if !director(&c) {return Err(forbidden());} check_period(p.year,p.month,&p.kind)?;
- let rows=sqlx::query("SELECT id,title,status,revision,created_at,snapshot,introduction,conclusion FROM sector_documents WHERE year=$1 AND month=$2 AND kind=$3 ORDER BY revision DESC").bind(p.year).bind(p.month).bind(p.kind).fetch_all(&s.db).await.map_err(db)?;
+ let rows=sqlx::query("SELECT id,title,status,revision,created_at,snapshot,introduction,conclusion FROM sector_documents WHERE year=$1 AND month=$2 AND kind=$3 AND sector_id=$4 ORDER BY revision DESC").bind(p.year).bind(p.month).bind(p.kind).bind(c.sector_id.ok_or_else(forbidden)?).fetch_all(&s.db).await.map_err(db)?;
  Ok(Json(Value::Array(rows.iter().map(|r|json!({"id":r.get::<Uuid,_>("id"),"title":r.get::<String,_>("title"),"status":r.get::<String,_>("status"),"revision":r.get::<i32,_>("revision"),"created_at":r.get::<chrono::DateTime<Utc>,_>("created_at"),"snapshot":r.get::<Value,_>("snapshot"),"introduction":r.get::<String,_>("introduction"),"conclusion":r.get::<String,_>("conclusion")})).collect())))
 }
 #[derive(Deserialize)] struct BuildSector {year:i32,month:i32,kind:String,department_ids:Vec<Uuid>,introduction:Option<String>,conclusion:Option<String>}
@@ -729,7 +730,7 @@ async fn build_sector(State(s):State<App>,h:HeaderMap,Json(p):Json<BuildSector>)
  if p.department_ids.is_empty() {return Err(bad("Odaberite barem jedan odjel"));}
  let mut sections=Vec::new();
  for dept_id in &p.department_ids {
-  let d=sqlx::query("SELECT name,code FROM departments WHERE id=$1").bind(dept_id).fetch_optional(&s.db).await.map_err(db)?.ok_or_else(||bad("Nepoznat odjel"))?;
+  let d=sqlx::query("SELECT name,code FROM departments WHERE id=$1 AND sector_id=$2").bind(dept_id).bind(c.sector_id.ok_or_else(forbidden)?).fetch_optional(&s.db).await.map_err(db)?.ok_or_else(||bad("Nepoznat odjel"))?;
   let accepted:Option<String>=sqlx::query_scalar("SELECT status FROM department_documents WHERE department_id=$1 AND year=$2 AND month=$3 AND kind=$4").bind(dept_id).bind(p.year).bind(p.month).bind(&p.kind).fetch_optional(&s.db).await.map_err(db)?;
   if accepted.as_deref()!=Some("submitted") {return Err(bad(format!("Odjel {} još nije predao dokument",d.get::<String,_>("name"))));}
   // A director must consume the submitted immutable snapshot, NOT live activities.
@@ -744,8 +745,8 @@ async fn build_sector(State(s):State<App>,h:HeaderMap,Json(p):Json<BuildSector>)
  }
  let title=format!("{} značajnijih aktivnosti za {:02}.{}.",if p.kind=="plan" {"PLAN"}else{"IZVJEŠĆE"},p.month,p.year);
  let snapshot=json!({"year":p.year,"month":p.month,"kind":p.kind,"title":title,"sections":sections});
- let revision:i32=sqlx::query_scalar("SELECT COALESCE(MAX(revision),0)+1 FROM sector_documents WHERE year=$1 AND month=$2 AND kind=$3").bind(p.year).bind(p.month).bind(&p.kind).fetch_one(&s.db).await.map_err(db)?;
- let id:Uuid=sqlx::query_scalar("INSERT INTO sector_documents(year,month,kind,title,introduction,conclusion,snapshot,revision,created_by) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING id").bind(p.year).bind(p.month).bind(&p.kind).bind(&title).bind(p.introduction.unwrap_or_default()).bind(p.conclusion.unwrap_or_default()).bind(snapshot).bind(revision).bind(c.sub).fetch_one(&s.db).await.map_err(db)?;
+ let revision:i32=sqlx::query_scalar("SELECT COALESCE(MAX(revision),0)+1 FROM sector_documents WHERE year=$1 AND month=$2 AND kind=$3 AND sector_id=$4").bind(p.year).bind(p.month).bind(&p.kind).bind(c.sector_id.ok_or_else(forbidden)?).fetch_one(&s.db).await.map_err(db)?;
+ let id:Uuid=sqlx::query_scalar("INSERT INTO sector_documents(year,month,kind,title,introduction,conclusion,snapshot,revision,created_by,sector_id) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING id").bind(p.year).bind(p.month).bind(&p.kind).bind(&title).bind(p.introduction.unwrap_or_default()).bind(p.conclusion.unwrap_or_default()).bind(snapshot).bind(revision).bind(c.sub).bind(c.sector_id.ok_or_else(forbidden)?).fetch_one(&s.db).await.map_err(db)?;
  audit(&s,&c,"sector.build",Some(id)).await; Ok(Json(json!({"id":id,"revision":revision})))
 }
 
@@ -754,7 +755,7 @@ async fn build_sector(State(s):State<App>,h:HeaderMap,Json(p):Json<BuildSector>)
 #[derive(Deserialize)] struct EditSector {snapshot:Value,introduction:String,conclusion:String}
 async fn edit_sector(State(s):State<App>,h:HeaderMap,Path(id):Path<Uuid>,Json(p):Json<EditSector>)->ResultApi<Json<Value>> {
  let c=who(&s,&h)?; if !director(&c) {return Err(forbidden());}
- let row=sqlx::query("SELECT snapshot,status FROM sector_documents WHERE id=$1").bind(id).fetch_optional(&s.db).await.map_err(db)?.ok_or_else(||bad("Dokument nije pronađen"))?;
+ let row=sqlx::query("SELECT snapshot,status FROM sector_documents WHERE id=$1 AND sector_id=$2").bind(id).bind(c.sector_id.ok_or_else(forbidden)?).fetch_optional(&s.db).await.map_err(db)?.ok_or_else(||bad("Dokument nije pronađen"))?;
  if row.get::<String,_>("status")!="draft" {return Err(bad("Zaključana revizija se ne može mijenjati"));}
  let old:Value=row.get("snapshot");
  let original=old.get("sections").and_then(Value::as_array).ok_or_else(||bad("Neispravan izvorni dokument"))?;
@@ -794,8 +795,8 @@ async fn edit_sector(State(s):State<App>,h:HeaderMap,Path(id):Path<Uuid>,Json(p)
  if new_sections.iter().all(|s| s.get("items").and_then(Value::as_array).map(|a|a.is_empty()).unwrap_or(true)) {return Err(bad("Završni dokument mora sadržavati barem jednu stavku"));}
  let mut snapshot=old; snapshot["sections"]=json!(new_sections);
  let mut tx=s.db.begin().await.map_err(db)?;
- let n=sqlx::query("UPDATE sector_documents SET snapshot=$2,introduction=$3,conclusion=$4 WHERE id=$1 AND status='draft'")
-  .bind(id).bind(&snapshot).bind(&p.introduction).bind(&p.conclusion).execute(&mut *tx).await.map_err(db)?.rows_affected();
+ let n=sqlx::query("UPDATE sector_documents SET snapshot=$2,introduction=$3,conclusion=$4 WHERE id=$1 AND status='draft' AND sector_id=$5")
+  .bind(id).bind(&snapshot).bind(&p.introduction).bind(&p.conclusion).bind(c.sector_id.ok_or_else(forbidden)?).execute(&mut *tx).await.map_err(db)?.rows_affected();
  if n==0 {return Err(bad("Dokument je u međuvremenu zaključan"));}
  sqlx::query("INSERT INTO sector_document_edits(sector_document_id,snapshot,introduction,conclusion,edited_by) VALUES($1,$2,$3,$4,$5)")
   .bind(id).bind(snapshot).bind(&p.introduction).bind(&p.conclusion).bind(c.sub).execute(&mut *tx).await.map_err(db)?;
@@ -805,14 +806,14 @@ async fn edit_sector(State(s):State<App>,h:HeaderMap,Path(id):Path<Uuid>,Json(p)
 
 async fn lock_sector(State(s):State<App>,h:HeaderMap,Path(id):Path<Uuid>)->ResultApi<Json<Value>> {
  let c=who(&s,&h)?; if !director(&c) {return Err(forbidden());}
- let n=sqlx::query("UPDATE sector_documents SET status='locked',locked_at=now() WHERE id=$1 AND status='draft'").bind(id).execute(&s.db).await.map_err(db)?.rows_affected();
+ let n=sqlx::query("UPDATE sector_documents SET status='locked',locked_at=now() WHERE id=$1 AND status='draft' AND sector_id=$2").bind(id).bind(c.sector_id.ok_or_else(forbidden)?).execute(&s.db).await.map_err(db)?.rows_affected();
  if n==0 {return Err(bad("Dokument nije nacrt ili ne postoji"));} audit(&s,&c,"sector.lock",Some(id)).await;
  Ok(Json(json!({"ok":true})))
 }
 async fn export_doc(State(s):State<App>,h:HeaderMap,Path((id,format)):Path<(Uuid,String)>)->ResultApi<Response> {
  let c=who(&s,&h)?; if !director(&c) {return Err(forbidden());}
  if format!="docx" && format!="pdf" {return Err(bad("Nepodržani format"));}
- let r=sqlx::query("SELECT title,introduction,conclusion,snapshot,revision FROM sector_documents WHERE id=$1").bind(id).fetch_optional(&s.db).await.map_err(db)?.ok_or_else(||bad("Nepostojeći dokument"))?;
+ let r=sqlx::query("SELECT title,introduction,conclusion,snapshot,revision FROM sector_documents WHERE id=$1 AND sector_id=$2").bind(id).bind(c.sector_id.ok_or_else(forbidden)?).fetch_optional(&s.db).await.map_err(db)?.ok_or_else(||bad("Nepostojeći dokument"))?;
  let payload=json!({"title":r.get::<String,_>("title"),"introduction":r.get::<String,_>("introduction"),"conclusion":r.get::<String,_>("conclusion"),"snapshot":r.get::<Value,_>("snapshot")});
  let resp=s.client.post(format!("{}/render/{}",s.doc_url,format)).json(&payload).send().await.map_err(|e|ErrApi(StatusCode::BAD_GATEWAY,e.to_string()))?;
  if !resp.status().is_success() {return Err(ErrApi(StatusCode::BAD_GATEWAY,resp.text().await.unwrap_or_default()));}
