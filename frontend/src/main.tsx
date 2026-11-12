@@ -5,6 +5,7 @@ import {api,post,patch,q,download,type User,type Dept,type Activity,type Update,
 import './style.css';
 import HistorySearch from './HistorySearch';
 import Dashboard from './Dashboard';
+import OrganizationAdmin from './OrganizationAdmin';
 import ActivityConversation from './ActivityConversation';
 import CarryPlanner from './CarryPlanner';
 import ActivityDetailsEditor from './ActivityDetailsEditor';
@@ -52,9 +53,9 @@ function App(){
  const [sourceVersions,setSourceVersions]=useState<Record<string,number>>({});
  const notify=(f:()=>Promise<unknown>)=>{setLoading(true);setError('');setNotice('');void f().then((result)=>setNotice(typeof result==='string'?result:'Promjene su spremljene.')).catch(e=>setError(String(e.message))).finally(()=>setLoading(false));};
  useEffect(()=>{if(!token)return;api<User>('/auth/me').then(setUser).catch(()=>{sessionStorage.removeItem('rf_token');setToken(null);});},[token]);
- useEffect(()=>{if(!user)return;api<Dept[]>('/departments').then(d=>{setDepts(d);setDept(p=>p||user.department_id||d[0]?.id||'');setChosen(d.map(x=>x.id));}).catch(e=>setError(e.message));},[user]);
+ useEffect(()=>{if(!user||['admin','org_admin'].includes(user.role))return;api<Dept[]>('/departments').then(d=>{setDepts(d);setDept(p=>p||user.department_id||d[0]?.id||'');setChosen(d.map(x=>x.id));}).catch(e=>setError(e.message));},[user]);
  const refresh=useCallback(async()=>{
-  if(!user||!dept)return;
+  if(!user||!dept||['admin','org_admin'].includes(user.role))return;
   const params={department_id:dept,year,month,kind};
   const jobs:Promise<unknown>[]=[api<Activity[]>('/activities'+q({department_id:dept})).then(setActivities),api<Update[]>('/updates'+q(params)).then(setUpdates),api<{status:string}>('/department-documents'+q(params)).then(x=>setDocStatus(x.status))];
   if(user.role==='admin'||user.role==='director')jobs.push(api<SectorDoc[]>('/sector-documents'+q({year,month,kind})).then(setDocs));
@@ -64,19 +65,20 @@ function App(){
   await Promise.all(jobs);
  },[user,dept,year,month,kind]);
  useEffect(()=>{void refresh().catch(e=>setError(e.message));},[refresh]);
- useEffect(()=>{if(!user||!dept)return;api<DepartmentVersion[]>('/department-document-versions'+q({department_id:dept,year,month,kind})).then(setVersions).catch(()=>setVersions([]));},[user,dept,year,month,kind,docStatus]);
- useEffect(()=>{if(!user||!['admin','director'].includes(user.role))return;api<Array<{department_id:string;version:number}>>('/sector-document-freshness'+q({year,month,kind})).then(rows=>setSourceVersions(Object.fromEntries(rows.map(x=>[x.department_id,x.version])))).catch(()=>setSourceVersions({}));},[user,year,month,kind,docs]);
+ useEffect(()=>{if(!user||!dept||['admin','org_admin'].includes(user.role))return;api<DepartmentVersion[]>('/department-document-versions'+q({department_id:dept,year,month,kind})).then(setVersions).catch(()=>setVersions([]));},[user,dept,year,month,kind,docStatus]);
+ useEffect(()=>{if(!user||user.role!=='director')return;api<Array<{department_id:string;version:number}>>('/sector-document-freshness'+q({year,month,kind})).then(rows=>setSourceVersions(Object.fromEntries(rows.map(x=>[x.department_id,x.version])))).catch(()=>setSourceVersions({}));},[user,year,month,kind,docs]);
  useEffect(()=>{
-  if(!user)return;
+  if(!user||['admin','org_admin'].includes(user.role))return;
   let live=true;
   const check=()=>{void api<Array<{unread:number}>>('/inbox').then(items=>{if(live)setInboxUnread(items.reduce((n,i)=>n+i.unread,0));}).catch(()=>{});};
   check();const timer=window.setInterval(check,30000);
   return ()=>{live=false;window.clearInterval(timer);};
  },[user]);
  if(!token||!user)return <Login onLogin={(v)=>{sessionStorage.setItem('rf_token',v);setToken(v);}} />;
- const canEdit=user.role==='admin'||(user.department_id===dept&&(user.role==='manager'||user.role==='employee'));
- const canSubmit=user.role==='admin'||(user.department_id===dept&&user.role==='manager');
- const isDirector=user.role==='admin'||user.role==='director';
+ if(user.role==='admin'||user.role==='org_admin')return <OrganizationAdmin user={user} onLogout={()=>{sessionStorage.removeItem('rf_token');setToken(null);setUser(null);}}/>;
+ const canEdit=user.department_id===dept&&(user.role==='manager'||user.role==='employee');
+ const canSubmit=user.department_id===dept&&user.role==='manager';
+ const isDirector=user.role==='director';
  const selectedDept=depts.find(d=>d.id===dept);
  const currentCalendar=new Date();
  const futureReport=kind==='report'&&(year>currentCalendar.getFullYear()||(year===currentCalendar.getFullYear()&&month>currentCalendar.getMonth()+1));
