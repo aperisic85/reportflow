@@ -391,8 +391,8 @@ async fn activity_field_history(State(s):State<App>,h:HeaderMap,Path(id):Path<Uu
 fn check_period(y:i32,m:i32,k:&str)->ResultApi<()> { if !(2000..=2100).contains(&y)||!(1..=12).contains(&m)||!["plan","report"].contains(&k) {Err(bad("Nevaljan mjesec, godina ili vrsta dokumenta"))} else {Ok(())} }
 async fn updates(State(s):State<App>,h:HeaderMap,Query(p):Query<PeriodFilter>)->ResultApi<Json<Value>> {
  let c=who(&s,&h).await?; guard_dept(&s,&c,p.department_id,"read").await?; check_period(p.year,p.month,&p.kind)?;
- let rows=sqlx::query("SELECT u.id,u.activity_id,u.content,u.progress,u.include_in_document,u.updated_at FROM activity_updates u JOIN activities a ON a.id=u.activity_id WHERE a.department_id=$1 AND u.year=$2 AND u.month=$3 AND u.kind=$4 ORDER BY a.sort_order,a.created_at").bind(p.department_id).bind(p.year).bind(p.month).bind(p.kind).fetch_all(&s.db).await.map_err(db)?;
- Ok(Json(Value::Array(rows.iter().map(|r|json!({"id":r.get::<Uuid,_>("id"),"activity_id":r.get::<Uuid,_>("activity_id"),"content":r.get::<String,_>("content"),"progress":r.get::<String,_>("progress"),"include_in_document":r.get::<bool,_>("include_in_document"),"updated_at":r.get::<chrono::DateTime<Utc>,_>("updated_at")})).collect())))
+ let rows=sqlx::query("SELECT u.id,u.activity_id,u.content,u.progress,u.include_in_document,u.created_at,u.updated_at,u.creation_time_estimated,u.created_by,u.updated_by,uc.full_name AS created_by_name,uu.full_name AS updated_by_name FROM activity_updates u JOIN activities a ON a.id=u.activity_id LEFT JOIN users uc ON uc.id=u.created_by LEFT JOIN users uu ON uu.id=u.updated_by WHERE a.department_id=$1 AND u.year=$2 AND u.month=$3 AND u.kind=$4 ORDER BY a.sort_order,a.created_at").bind(p.department_id).bind(p.year).bind(p.month).bind(p.kind).fetch_all(&s.db).await.map_err(db)?;
+ Ok(Json(Value::Array(rows.iter().map(|r|json!({"id":r.get::<Uuid,_>("id"),"activity_id":r.get::<Uuid,_>("activity_id"),"content":r.get::<String,_>("content"),"progress":r.get::<String,_>("progress"),"include_in_document":r.get::<bool,_>("include_in_document"),"created_at":r.get::<chrono::DateTime<Utc>,_>("created_at"),"updated_at":r.get::<chrono::DateTime<Utc>,_>("updated_at"),"created_by":r.get::<Option<Uuid>,_>("created_by"),"updated_by":r.get::<Option<Uuid>,_>("updated_by"),"created_by_name":r.get::<Option<String>,_>("created_by_name"),"updated_by_name":r.get::<Option<String>,_>("updated_by_name"),"creation_time_estimated":r.get::<bool,_>("creation_time_estimated")})).collect())))
 }
 #[derive(Deserialize)] struct SaveUpdate {activity_id:Uuid,year:i32,month:i32,kind:String,content:String,progress:String,include_in_document:bool}
 async fn save_update(State(s):State<App>,h:HeaderMap,Json(p):Json<SaveUpdate>)->ResultApi<Json<Value>> {
@@ -403,7 +403,7 @@ async fn save_update(State(s):State<App>,h:HeaderMap,Json(p):Json<SaveUpdate>)->
  if !["in_progress","completed","postponed","not_started"].contains(&p.progress.as_str()) {return Err(bad("Nevaljan status realizacije"));}
  let status:Option<String>=sqlx::query_scalar("SELECT status FROM department_documents WHERE department_id=$1 AND year=$2 AND month=$3 AND kind=$4").bind(d).bind(p.year).bind(p.month).bind(&p.kind).fetch_optional(&s.db).await.map_err(db)?;
  if status.as_deref()==Some("submitted") {return Err(bad("Dokument je predan; voditelj ga prvo mora vratiti u nacrt"));}
- let id:Uuid=sqlx::query_scalar("INSERT INTO activity_updates(activity_id,year,month,kind,content,progress,include_in_document,updated_by) VALUES($1,$2,$3,$4,$5,$6,$7,$8) ON CONFLICT(activity_id,year,month,kind) DO UPDATE SET content=EXCLUDED.content, progress=EXCLUDED.progress, include_in_document=EXCLUDED.include_in_document,updated_by=EXCLUDED.updated_by,updated_at=now() RETURNING id").bind(p.activity_id).bind(p.year).bind(p.month).bind(p.kind).bind(p.content).bind(p.progress).bind(p.include_in_document).bind(c.sub).fetch_one(&s.db).await.map_err(db)?;
+ let id:Uuid=sqlx::query_scalar("INSERT INTO activity_updates(activity_id,year,month,kind,content,progress,include_in_document,updated_by,created_by) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$8) ON CONFLICT(activity_id,year,month,kind) DO UPDATE SET content=EXCLUDED.content, progress=EXCLUDED.progress, include_in_document=EXCLUDED.include_in_document,updated_by=EXCLUDED.updated_by,updated_at=now() RETURNING id").bind(p.activity_id).bind(p.year).bind(p.month).bind(p.kind).bind(p.content).bind(p.progress).bind(p.include_in_document).bind(c.sub).fetch_one(&s.db).await.map_err(db)?;
  audit(&s,&c,"update.save",Some(id)).await; Ok(Json(json!({"id":id})))
 }
 
@@ -452,7 +452,7 @@ async fn carry_forward(State(s):State<App>,h:HeaderMap,Json(p):Json<CarryRequest
  if !wanted.is_subset(&available) {return Err(bad("Odabrane aktivnosti nisu nedovršene stavke prethodnog izvješća"));}
  let mut created=0u64;
  for id in wanted {
-  created+=sqlx::query("INSERT INTO activity_updates(activity_id,year,month,kind,content,progress,include_in_document,updated_by) VALUES($1,$2,$3,'plan','', 'not_started',true,$4) ON CONFLICT(activity_id,year,month,kind) DO NOTHING")
+  created+=sqlx::query("INSERT INTO activity_updates(activity_id,year,month,kind,content,progress,include_in_document,updated_by,created_by) VALUES($1,$2,$3,'plan','', 'not_started',true,$4,$4) ON CONFLICT(activity_id,year,month,kind) DO NOTHING")
    .bind(id).bind(p.year).bind(p.month).bind(c.sub).execute(&mut *tx).await.map_err(db)?.rows_affected();
  }
  tx.commit().await.map_err(db)?;
@@ -506,8 +506,8 @@ async fn move_activity(State(s):State<App>,h:HeaderMap,Path(id):Path<Uuid>,Json(
 
 async fn department_docs(State(s):State<App>,h:HeaderMap,Query(p):Query<PeriodFilter>)->ResultApi<Json<Value>> {
  let c=who(&s,&h).await?; guard_dept(&s,&c,p.department_id,"read").await?; check_period(p.year,p.month,&p.kind)?;
- let row=sqlx::query("SELECT id,status,submitted_at FROM department_documents WHERE department_id=$1 AND year=$2 AND month=$3 AND kind=$4").bind(p.department_id).bind(p.year).bind(p.month).bind(p.kind).fetch_optional(&s.db).await.map_err(db)?;
- Ok(Json(match row {Some(r)=>json!({"id":r.get::<Uuid,_>("id"),"status":r.get::<String,_>("status"),"submitted_at":r.get::<Option<chrono::DateTime<Utc>>,_>("submitted_at")}),None=>json!({"status":"draft"})}))
+ let row=sqlx::query("SELECT d.id,d.status,d.submitted_at,d.created_at,d.creation_time_estimated,c.full_name AS created_by_name,p.full_name AS submitted_by_name FROM department_documents d LEFT JOIN users c ON c.id=d.created_by LEFT JOIN users p ON p.id=d.submitted_by WHERE d.department_id=$1 AND year=$2 AND month=$3 AND kind=$4").bind(p.department_id).bind(p.year).bind(p.month).bind(p.kind).fetch_optional(&s.db).await.map_err(db)?;
+ Ok(Json(match row {Some(r)=>json!({"id":r.get::<Uuid,_>("id"),"status":r.get::<String,_>("status"),"submitted_at":r.get::<Option<chrono::DateTime<Utc>>,_>("submitted_at"),"created_at":r.get::<chrono::DateTime<Utc>,_>("created_at"),"created_by_name":r.get::<Option<String>,_>("created_by_name"),"submitted_by_name":r.get::<Option<String>,_>("submitted_by_name"),"creation_time_estimated":r.get::<bool,_>("creation_time_estimated")}),None=>json!({"status":"draft"})}))
 }
 #[derive(Deserialize)] struct SubmitDept {department_id:Uuid,year:i32,month:i32,kind:String,status:String}
 async fn save_department_doc(State(s):State<App>,h:HeaderMap,Json(p):Json<SubmitDept>)->ResultApi<Json<Value>> {
@@ -522,8 +522,8 @@ async fn save_department_doc(State(s):State<App>,h:HeaderMap,Json(p):Json<Submit
 
  let mut tx=s.db.begin().await.map_err(db)?;
  // Protect the version sequence from concurrent submissions.
- let doc=sqlx::query("INSERT INTO department_documents(department_id,year,month,kind,status,submitted_by,submitted_at) VALUES($1,$2,$3,$4,'draft',NULL,NULL) ON CONFLICT(department_id,year,month,kind) DO UPDATE SET id=department_documents.id RETURNING id")
-  .bind(p.department_id).bind(p.year).bind(p.month).bind(&p.kind).fetch_one(&mut *tx).await.map_err(db)?;
+ let doc=sqlx::query("INSERT INTO department_documents(department_id,year,month,kind,status,submitted_by,submitted_at,created_by) VALUES($1,$2,$3,$4,'draft',NULL,NULL,$5) ON CONFLICT(department_id,year,month,kind) DO UPDATE SET id=department_documents.id RETURNING id")
+  .bind(p.department_id).bind(p.year).bind(p.month).bind(&p.kind).bind(c.sub).fetch_one(&mut *tx).await.map_err(db)?;
  let id:Uuid=doc.get("id");
  let old: String=sqlx::query_scalar("SELECT status FROM department_documents WHERE id=$1 FOR UPDATE").bind(id).fetch_one(&mut *tx).await.map_err(db)?;
  let mut version:Option<i32>=None;
@@ -543,7 +543,7 @@ async fn save_department_doc(State(s):State<App>,h:HeaderMap,Json(p):Json<Submit
   version=Some(next);
  }
  if p.status=="submitted" {
-  sqlx::query("UPDATE department_documents SET status='submitted',submitted_by=$2,submitted_at=COALESCE(submitted_at,now()) WHERE id=$1")
+  sqlx::query("UPDATE department_documents SET status='submitted',submitted_by=$2,submitted_at=now() WHERE id=$1")
    .bind(id).bind(c.sub).execute(&mut *tx).await.map_err(db)?;
  } else {
   sqlx::query("UPDATE department_documents SET status='draft',submitted_at=NULL WHERE id=$1")
