@@ -166,9 +166,9 @@ async fn dashboard(State(s):State<App>,h:HeaderMap,Query(p):Query<DashboardFilte
  if !dashboard_period_valid(p.year,p.month) {
   return Err(bad("Nevaljan mjesec ili godina"));
  }
- let scoped_dept=if director(&c) {None} else {
-  Some(c.department_id.ok_or_else(forbidden)?)
- };
+ if !matches!(c.role.as_str(),"director"|"manager"|"employee"){return Err(forbidden());}
+ let scope_sector=c.sector_id.ok_or_else(forbidden)?;
+ let scoped_dept=if director(&c) {None} else {Some(c.department_id.ok_or_else(forbidden)?)};
  // Counts are sourced from distinct activities, never from a join with multiple updates.
  let departments=sqlx::query(r#"
  SELECT d.id,d.name,d.code,
@@ -184,17 +184,17 @@ async fn dashboard(State(s):State<App>,h:HeaderMap,Query(p):Query<DashboardFilte
       WHERE dd.department_id=d.id AND dd.year=$2 AND dd.month=$3 AND dd.kind='report'),'draft') AS report_status,
    COALESCE((SELECT dd.status FROM department_documents dd
       WHERE dd.department_id=d.id AND dd.year=$2 AND dd.month=$3 AND dd.kind='plan'),'draft') AS plan_status
- FROM departments d WHERE ($1::uuid IS NULL OR d.id=$1)
+ FROM departments d WHERE ($1::uuid IS NULL OR d.id=$1) AND d.sector_id=$4
  ORDER BY d.sort_order,d.name
- "#).bind(scoped_dept).bind(p.year).bind(p.month).fetch_all(&s.db).await.map_err(db)?;
+ "#).bind(scoped_dept).bind(p.year).bind(p.month).bind(scope_sector).fetch_all(&s.db).await.map_err(db)?;
  let recent=sqlx::query(r#"
  SELECT u.activity_id,a.title,d.name AS department_name,u.year,u.month,u.kind,
         u.content,u.progress,u.updated_at
  FROM activity_updates u JOIN activities a ON a.id=u.activity_id
  JOIN departments d ON d.id=a.department_id
- WHERE ($1::uuid IS NULL OR d.id=$1)
+ WHERE ($1::uuid IS NULL OR d.id=$1) AND d.sector_id=$2
  ORDER BY u.updated_at DESC,u.id DESC LIMIT 8
- "#).bind(scoped_dept).fetch_all(&s.db).await.map_err(db)?;
+ "#).bind(scoped_dept).bind(scope_sector).fetch_all(&s.db).await.map_err(db)?;
  Ok(Json(json!({
   "year":p.year,"month":p.month,
   "departments":departments.iter().map(|r|json!({
@@ -242,10 +242,12 @@ async fn search_activities(State(s):State<App>,h:HeaderMap,Query(p):Query<Activi
  if let Some(y)=p.year {if !(2000..=2100).contains(&y){return Err(bad("Nevaljana godina"));}}
  if let Some(m)=p.month {if !(1..=12).contains(&m){return Err(bad("Nevaljan mjesec"));}}
  if let Some(k)=&p.kind {if !["plan","report"].contains(&k.as_str()){return Err(bad("Nevaljana vrsta dokumenta"));}}
- let scope=if director(&c) {p.department_id} else {
+ if !matches!(c.role.as_str(),"director"|"manager"|"employee"){return Err(forbidden());}
+ let sector=c.sector_id.ok_or_else(forbidden)?;
+ if let Some(requested)=p.department_id {guard_dept(&s,&c,requested,"read").await?;}
+ let scope=if director(&c){p.department_id}else{
   let d=c.department_id.ok_or_else(forbidden)?;
-  if p.department_id.is_some() && p.department_id!=Some(d) {return Err(forbidden());}
-  Some(d)
+  if p.department_id.is_some()&&p.department_id!=Some(d){return Err(forbidden());}Some(d)
  };
  let pattern=search_pattern(term);
  let rows=sqlx::query(r#"
@@ -255,7 +257,7 @@ async fn search_activities(State(s):State<App>,h:HeaderMap,Query(p):Query<Activi
  FROM activities a
  JOIN departments d ON d.id=a.department_id
  LEFT JOIN activity_updates u ON u.activity_id=a.id
- WHERE ($1::uuid IS NULL OR a.department_id=$1)
+ WHERE ($1::uuid IS NULL OR a.department_id=$1) AND d.sector_id=$7
    AND (a.title ILIKE $2 ESCAPE '\' OR a.description ILIKE $2 ESCAPE '\'
         OR u.content ILIKE $2 ESCAPE '\')
    AND ($3::int IS NULL OR u.year=$3)
@@ -265,7 +267,7 @@ async fn search_activities(State(s):State<App>,h:HeaderMap,Query(p):Query<Activi
  LIMIT $6
  "#)
  .bind(scope).bind(pattern).bind(p.year).bind(p.month).bind(p.kind)
- .bind(p.limit.unwrap_or(50).clamp(1,100))
+ .bind(p.limit.unwrap_or(50).clamp(1,100)).bind(sector)
  .fetch_all(&s.db).await.map_err(db)?;
  Ok(Json(Value::Array(rows.iter().map(|r|json!({
   "activity_id":r.get::<Uuid,_>("activity_id"),
