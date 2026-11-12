@@ -1,11 +1,12 @@
 import type {SectorDoc,SectorSnapshot} from './api';
+import {numberedActivities} from './activityHierarchy';
 type DepartmentVersion={id:string;version:number;snapshot:{items:Array<{id:string;title:string;description:string;content:string;progress:string;parent_id:string|null}>;kind:string;year:number;month:number};author:string;submitted_at:string};
 export type {DepartmentVersion};
 const stamp=(v:string)=>new Date(v).toLocaleString('hr-HR',{dateStyle:'medium',timeStyle:'short'});
 const progressLabels:Record<string,string>={in_progress:'U tijeku',completed:'Završeno',postponed:'Odgođeno',not_started:'Nije započeto'};
 function Items({items,kind}:{items:Array<{id:string;title:string;description?:string;content?:string;progress?:string}>;kind:'plan'|'report'}){
- return <div className="report-items">{items.map((item,index)=><article key={item.id} className="report-item">
-  <h4>{index+1}. {item.title}</h4>
+ return <div className="report-items">{numberedActivities(items).map(({item,number,depth})=><article key={item.id} className={'report-item'+(depth>0?' report-item-child':'')} style={{'--report-depth':Math.min(depth,5)} as React.CSSProperties}>
+  <h4><span className="report-item-number">{number}</span> {item.title}</h4>
   {item.description?.trim()&&<p>{item.description}</p>}
   {item.content?.trim()&&<p className="report-actual"><strong>{kind==='report'?'Mjesečna realizacija:':'Mjesečni plan:'}</strong> {item.content}</p>}
   {item.progress&&<small>{progressLabels[item.progress]??item.progress}</small>}
