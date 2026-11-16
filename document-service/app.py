@@ -89,9 +89,9 @@ def populate(payload: RenderRequest) -> bytes:
                     f'Evidentirao/la: {author}' if author else ''
                 ] if x)
                 if meta:
-                    detail = doc.add_paragraph(meta)
-                    detail.paragraph_format.left_indent = Cm(0.45)
-                    detail.paragraph_format.space_after = Pt(5)
+                    meta_para = doc.add_paragraph(meta)
+                    meta_para.paragraph_format.left_indent = Cm(0.45)
+                    meta_para.paragraph_format.space_after = Pt(5)
 
     if payload.conclusion.strip():
         p = doc.add_paragraph()
