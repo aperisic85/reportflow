@@ -691,7 +691,7 @@ button:focus-visible,summary:focus-visible{outline:3px solid #e58d1a;outline-off
 .rf-tree-toggle,.rf-tree-toggle-placeholder{width:25px;height:25px;flex:0 0 25px;display:inline-flex;align-items:center;justify-content:center}
 .rf-tree-toggle{border:0;background:transparent;color:#98500f;border-radius:5px;cursor:pointer;padding:2px}
 .rf-tree-toggle:hover{background:#ffedcf}
-.rf-registry-name{display:flex;align-items:center;gap:7px;min-width:0}
+.ux-registry-name{display:flex;align-items:center;gap:7px;min-width:0}
 .rf-registry-name>div{min-width:0}
 .report-unplanned{margin:20px 0 8px;padding:14px 16px;background:#fffaf1;border-left:3px solid #d85e08}
 .report-unplanned h4{margin:0 0 10px;color:#91480d;font-size:14px}
