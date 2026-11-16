@@ -694,7 +694,7 @@ button:focus-visible,summary:focus-visible{outline:3px solid #e58d1a;outline-off
 .ux-registry-name{display:flex;align-items:center;gap:7px;min-width:0}
 .rf-registry-name>div{min-width:0}
 .report-unplanned{margin:20px 0 8px;padding:14px 16px;background:#fffaf1;border-left:3px solid #d85e08}
-.report-unplanned h4{margin:0 0 10px;color:#91480d;font-size:14px}
+.report-unplanned h3,.report-unplanned h4{margin:0 0 10px;color:#91480d;font-size:14px}
 .report-unplanned article{padding:9px 0;border-bottom:1px solid #eadfce}
 .report-unplanned article:last-child{border-bottom:0}
 .report-unplanned article>div{display:flex;gap:10px;align-items:baseline;flex-wrap:wrap}
