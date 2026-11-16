@@ -1,6 +1,6 @@
 import React,{useCallback,useEffect,useState} from 'react';
 import {createRoot} from 'react-dom/client';
-import {BookOpen,CalendarDays,ClipboardCheck,FileDown,FileText,FolderKanban,LogOut,Plus,RefreshCw,Shield,Bell,MessageCircle,ArrowUp,ArrowDown,Save,PenLine} from 'lucide-react';
+import {BookOpen,CalendarDays,ClipboardCheck,FileDown,FileText,FolderKanban,LogOut,Plus,RefreshCw,Shield,Bell,MessageCircle,ArrowUp,ArrowDown,Save,PenLine,ChevronDown,ChevronRight} from 'lucide-react';
 import {api,post,patch,q,download,downloadArchived,type User,type Dept,type Activity,type Update,type SectorDoc,type SectorSnapshot,type PlanReference} from './api';
 import './style.css';
 import HistorySearch from './HistorySearch';
@@ -13,6 +13,7 @@ import ActivityDetailsEditor from './ActivityDetailsEditor';
 import Inbox from './Inbox';
 import {DepartmentReportPreview,SectorReportPreview,type DepartmentVersion} from './ReportPreview';
 import MonthlyEntry from './MonthlyEntry';
+import UnplannedActivityLog from './UnplannedActivityLog';
 import {numberedActivities} from './activityHierarchy';
 const today=new Date();
 const kinds=[{value:'report',label:'Izvješće'},{value:'plan',label:'Plan'}];
@@ -46,7 +47,7 @@ function App(){
  const [planRefs,setPlanRefs]=useState<PlanReference[]>([]);
  const [selectedDraft,setSelectedDraft]=useState<SectorDoc|null>(null);
  const [entrySearch,setEntrySearch]=useState(''),[entryFilter,setEntryFilter]=useState('all');
- const [registrySearch,setRegistrySearch]=useState(''),[registryDetails,setRegistryDetails]=useState<string[]>([]);
+ const [registrySearch,setRegistrySearch]=useState(''),[registryDetails,setRegistryDetails]=useState<string[]>([]),[collapsedRegistry,setCollapsedRegistry]=useState<string[]>([]);
  const [showNewActivity,setShowNewActivity]=useState(false);
  const [editActivityId,setEditActivityId]=useState<string|null>(null);
  const [chatActivityId,setChatActivityId]=useState<string|null>(null),[chatThreadId,setChatThreadId]=useState<string|null>(null);
@@ -92,8 +93,17 @@ function App(){
   return matchesText&&(entryFilter==='all'||(entryFilter==='saved'?existing:!existing));
  });
  const normalizedRegistrySearch=registrySearch.trim().toLocaleLowerCase('hr');
- const visibleRegistry=treeOrder(activities).filter(a=>!normalizedRegistrySearch||
-  (a.title+' '+a.description).toLocaleLowerCase('hr').includes(normalizedRegistrySearch));
+ const registryById=new Map(activities.map(a=>[a.id,a]));
+ const hiddenByCollapsedParent=(activity:Activity)=>{
+  let parent=activity.parent_id;let remaining=activities.length;
+  while(parent&&remaining-->0){
+   if(collapsedRegistry.includes(parent))return true;
+   parent=registryById.get(parent)?.parent_id??null;
+  }
+  return false;
+ };
+ const visibleRegistry=treeOrder(activities).filter(a=>!hiddenByCollapsedParent(a)&&(!normalizedRegistrySearch||
+  (a.title+' '+a.description).toLocaleLowerCase('hr').includes(normalizedRegistrySearch)));
  const toggleRegistryDetails=(id:string)=>setRegistryDetails(ids=>ids.includes(id)?ids.filter(x=>x!==id):[...ids,id]);
  // The preview must use the same defaults as the backend document generator.
  // A missing monthly record does not mean the registry activity is excluded.
@@ -156,30 +166,32 @@ function App(){
       initial={dataByActivity[a.id]} disabled={!canEdit||docStatus==='submitted'||(user.role==='employee'&&a.created_by!==user.id)}
       onSave={(c,p,i)=>notify(()=>saveUpdate(a.id,c,p,i))} busy={loading} number={number}/></div>)}</div>}
    </section>}
-   {tab==='activities'&&<><section className="panel ux-panel">
+   {tab==='activities'&&<><UnplannedActivityLog departmentId={dept} activities={activities} canWrite={canEdit} currentUserId={user.id} canManage={canSubmit}/><section className="panel ux-panel">
     <div className="ux-intro"><div><h2>Unos aktivnosti</h2>
      <p>Trajni popis poslova i projekata · {activities.length} aktivnosti</p></div>
-     {canEdit&&<button type="button" className="primary registry-create-trigger" aria-expanded={showNewActivity} onClick={()=>setShowNewActivity(v=>!v)}><Plus size={17}/>{showNewActivity?'Zatvori unos':'Nova aktivnost'}</button>}
+     {canEdit&&<button type="button" className="primary registry-create-trigger" aria-expanded={showNewActivity} onClick={()=>{setNewParent('');setShowNewActivity(v=>!v);}}><Plus size={17}/>{showNewActivity?'Zatvori unos':'Nova glavna aktivnost'}</button>}
     </div>
     {showNewActivity&&canEdit&&<form onSubmit={e=>{e.preventDefault();notify(saveActivity);}} className="registry-create-form form-grid">
-     <h3 className="wide">Nova aktivnost</h3>
+     <h3 className="wide">{newParent?'Nova podaktivnost':'Nova glavna aktivnost'}</h3>
+     {newParent&&<p className="wide rf-parent-context">Nadređena aktivnost: <strong>{activities.find(a=>a.id===newParent)?.title??'Odabrana aktivnost'}</strong></p>}
      <label className="wide">Naziv aktivnosti<input required value={newTitle} onChange={e=>setNewTitle(e.target.value)} placeholder="Npr. Modernizacija VHF sustava"/></label>
      <label className="wide">Opis aktivnosti<textarea rows={3} value={newDescription} onChange={e=>setNewDescription(e.target.value)} placeholder="Kratki opis posla ili projekta"/></label>
      <label>Vrsta aktivnosti<select value={newType} onChange={e=>setNewType(e.target.value)}><option value="ongoing">Trajna aktivnost</option><option value="project">Projekt</option><option value="one_off">Jednokratna aktivnost</option></select></label>
-     <label>Nadređena aktivnost (neobavezno)<select value={newParent} onChange={e=>setNewParent(e.target.value)}><option value="">Bez nadređene aktivnosti</option>{activities.map(a=><option value={a.id} key={a.id}>{a.title}</option>)}</select></label>
      <div className="wide registry-create-actions"><button className="primary" type="submit" disabled={loading}><Plus size={17}/> Spremi aktivnost</button><button className="outline" type="button" onClick={()=>setShowNewActivity(false)}>Odustani</button></div>
     </form>}
     <div className="ux-toolbar"><label>Pronađi aktivnost<input value={registrySearch} onChange={e=>setRegistrySearch(e.target.value)} placeholder="Naziv ili opis projekta / aktivnosti"/></label>
      <button type="button" className="outline" onClick={()=>setTab('entries')}>Izrada mjesečnog plana/izvješća</button>
     </div>
     {visibleRegistry.length===0?<Empty text="Nema aktivnosti koje odgovaraju pretrazi."/>:
-     <div className="ux-registry-list">{numberedActivities(visibleRegistry).map(({item:a,number,depth})=><article className={'ux-registry-item'+(depth?' is-child':'')} style={{marginLeft:Math.min(depth,5)*20}} key={a.id}>
+     <div className="ux-registry-list">{numberedActivities(visibleRegistry).map(({item:a,number,depth})=>{const hasChildren=activities.some(child=>child.parent_id===a.id);return <article className={'ux-registry-item'+(depth?' is-child':'')} style={{marginLeft:Math.min(depth,5)*20}} key={a.id}>
       <div className="ux-registry-top"><div className="ux-registry-name">
+       {hasChildren?<button type="button" className="rf-tree-toggle" aria-label={collapsedRegistry.includes(a.id)?'Proširi podaktivnosti':'Sažmi podaktivnosti'} aria-expanded={!collapsedRegistry.includes(a.id)} onClick={()=>setCollapsedRegistry(ids=>ids.includes(a.id)?ids.filter(id=>id!==a.id):[...ids,a.id])}>{collapsedRegistry.includes(a.id)?<ChevronRight size={17}/>:<ChevronDown size={17}/>}</button>:<span className="rf-tree-toggle-placeholder"/>}
        <span className="ux-parent-indicator">{number}</span>
        <div><button type="button" className="activity-title-link" onClick={()=>{setChatActivityId(a.id);setChatThreadId(null);}}>{a.title}</button><small>{a.created_at?'Kreirano '+new Date(a.created_at).toLocaleString('hr-HR',{dateStyle:'short',timeStyle:'medium'})+(a.created_by_name?' · '+a.created_by_name:'')+' · ':''}{a.type==='project'?'Projekt':a.type==='ongoing'?'Trajna aktivnost':'Jednokratna aktivnost'}</small></div>
       </div>
       <div className="ux-registry-actions">
        <span className="simple-registry-status">{statusNames[a.status]}</span>
+       {canEdit&&<button type="button" className="outline compact" onClick={()=>{setNewParent(a.id);setNewTitle('');setNewDescription('');setShowNewActivity(true);}}><Plus size={14}/> Podaktivnost</button>}
        <button type="button" className="outline compact" onClick={()=>{setChatActivityId(a.id);setChatThreadId(null);}}><MessageCircle size={14}/> Chat</button>
        {canSubmit&&<button type="button" className="outline compact" onClick={()=>setEditActivityId(id=>id===a.id?null:a.id)}>Uredi</button>}
        <button type="button" className="outline compact" onClick={()=>toggleRegistryDetails(a.id)}>{registryDetails.includes(a.id)?'Sakrij detalje':'Detalji'}</button>
@@ -198,7 +210,7 @@ function App(){
         <button className="outline compact" title="Pomakni dolje" disabled={loading} onClick={()=>notify(()=>moveOrder(a.id,1))}><ArrowDown size={15}/> Dolje</button>
        </div>}
       </div>}
-     </article>)}</div>}
+     </article>;})}</div>}
    </section></>}
    {tab==='department'&&<section className="panel"><div className="panel-head"><div><h2>{kind==='plan'?'Plan':'Izvješće'} odjela</h2><p>Predajom se zaključava uređivanje mjesečnih zapisa dok voditelj ne vrati dokument u nacrt.</p></div><span className={'chip '+(docStatus==='submitted'?'green':'amber')}>{docStatus==='submitted'?'Predano':'Nacrt'}</span></div><div className="summary"><div><strong>{activities.length}</strong><small>Aktivnosti u registru</small></div><div><strong>{updates.length}</strong><small>Mjesečnih zapisa</small></div><div><strong>{includedActivities.length}</strong><small>U dokumentu</small></div></div><div className="rf-document-audit">{docInfo?.created_at&&<p>Kreirano: <strong>{new Date(docInfo.created_at).toLocaleString('hr-HR',{dateStyle:'short',timeStyle:'medium'})}</strong>{docInfo.created_by_name?' · '+docInfo.created_by_name:''}{docInfo.creation_time_estimated?' (povijesni zapis – vrijeme približno)':''}</p>}{docInfo?.submitted_at&&<p>Predano: <strong>{new Date(docInfo.submitted_at).toLocaleString('hr-HR',{dateStyle:'short',timeStyle:'medium'})}</strong>{docInfo.submitted_by_name?' · '+docInfo.submitted_by_name:''}</p>}</div><h3>Pregled sadržaja</h3>{includedActivities.length?numberedActivities(includedActivities).map(({item:a,number,depth})=><div className={'activity-row report-hierarchy-row'+(depth?' is-child':'')} style={{marginLeft:Math.min(depth,5)*20}} key={a.id}><div><strong>{number}. {a.title}</strong>{previewContent(a).description&&<p>{previewContent(a).description}</p>}{previewContent(a).monthly&&<p><strong>{kind==='plan'?'Mjesečni plan:':'Mjesečna realizacija:'}</strong> {previewContent(a).monthly}</p>}</div></div>):<Empty text="Nema aktivnosti uključenih u dokument. Dodajte aktivnost ili označite 'U dokument'."/>}{futureReport&&<p className="simple-guidance">Izvješće za budući mjesec možeš pripremati kao nacrt, ali predaja je dopuštena tek od početka tog mjeseca.</p>}{canSubmit&&<div className="actions"><button className="primary" disabled={loading||(docStatus!=='submitted'&&(includedActivities.length===0||futureReport))} onClick={()=>notify(async()=>{await post('/department-documents',{department_id:dept,year,month,kind,status:docStatus==='submitted'?'draft':'submitted'});await refresh();})}>{docStatus==='submitted'?'Vrati u nacrt':kind==='plan'?'Predaj plan odjela':'Predaj izvješće odjela'}</button></div>}<div className="report-version-history">
   <h3>Predane verzije</h3>
