@@ -22,6 +22,7 @@ export default function UnplannedActivityLog({departmentId,activities,canWrite,c
  const [notice,setNotice]=useState('');
 
  useEffect(()=>{
+  if(!departmentId){setItems([]);return;}
   let live=true;
   const [year,month]=period.split('-').map(Number);
   api<UnplannedActivity[]>('/unplanned-activities'+q({department_id:departmentId,year,month}))
