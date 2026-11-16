@@ -18,6 +18,7 @@ class RenderRequest(BaseModel):
     introduction: str = ''
     conclusion: str = ''
     snapshot: dict
+    approval: dict | None = None
 
 
 def populate(payload: RenderRequest) -> bytes:
@@ -81,7 +82,9 @@ def health():
 def render(format: str, payload: RenderRequest):
     if format not in ('docx', 'pdf', 'modern-pdf', 'modern-letterhead-pdf'):
         raise HTTPException(400, 'Unsupported format')
-    content = (populate_modern(payload, memorandum=(format == 'modern-letterhead-pdf'))
+    if payload.approval and format not in ('modern-pdf', 'modern-letterhead-pdf'):
+        raise HTTPException(400, 'Approval metadata requires modern PDF')
+    content = (populate_modern(payload, memorandum=(format == 'modern-letterhead-pdf'), approval=payload.approval)
                if format in ('modern-pdf', 'modern-letterhead-pdf') else populate(payload))
     if format == 'docx':
         return Response(content=content, media_type='application/vnd.openxmlformats-officedocument.wordprocessingml.document')

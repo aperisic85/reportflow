@@ -17,7 +17,7 @@ export function SectorReportPreview({doc,onClose}:{doc:SectorDoc;onClose:()=>voi
  const snap=doc.snapshot as SectorSnapshot;
  return <section className="report-reader panel">
   <div className="collab-top"><div><span className="report-label">Digitalni pregled</span><h2>{doc.title}</h2>
-   <p>Revizija {doc.revision} · {doc.status==='locked'?'Zaključano':'Nacrt'} · kreirano {stamp(doc.created_at)}{doc.created_by_name?' · '+doc.created_by_name:''}</p></div>
+   <p>Revizija {doc.revision} · {doc.status==='approved'?'Interno odobreno':doc.status==='locked'?'Zaključano':'Nacrt'} · kreirano {stamp(doc.created_at)}{doc.created_by_name?' · '+doc.created_by_name:''}</p>{doc.document_number&&<p className="approval-number">Dokument: {doc.document_number} · odobrio/la {doc.approved_by_name??'Rukovoditelj'} · {doc.approved_at?stamp(doc.approved_at):''}</p>}</div>
    <button className="outline" type="button" onClick={onClose}>Zatvori</button></div>
   {doc.introduction.trim()&&<div className="report-intro"><h3>Uvod</h3><p>{doc.introduction}</p></div>}
   {snap.sections.map((sec,index)=><section className="report-section" key={sec.department_id}>

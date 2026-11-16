@@ -22,6 +22,7 @@ services:
       BOOTSTRAP_ADMIN: ${BOOTSTRAP_ADMIN:-admin}
       BOOTSTRAP_PASSWORD: ${BOOTSTRAP_PASSWORD}
       DOC_SERVICE_URL: http://documents:8081
+      VERIFY_BASE_URL: ${VERIFY_BASE_URL:-}
       RUST_LOG: info
     depends_on:
       db:

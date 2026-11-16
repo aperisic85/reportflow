@@ -6,7 +6,7 @@ export type Update = {id:string;activity_id:string;content:string;progress:strin
 export type SectorItem = {id:string;title:string;description:string;content:string;parent_id:string|null;type?:string;progress?:string};
 export type SectorSection = {department_id:string;code:string;name:string;source_version?:number|null;source_submitted_at?:string|null;source_submitted_by?:string|null;items:SectorItem[]};
 export type SectorSnapshot = {year:number;month:number;kind:string;title:string;sections:SectorSection[]};
-export type SectorDoc = {id:string;title:string;status:string;revision:number;created_at:string;created_by_name?:string|null;snapshot:SectorSnapshot;introduction:string;conclusion:string};
+export type SectorDoc = {id:string;title:string;status:string;revision:number;created_at:string;created_by_name?:string|null;document_number?:string|null;approved_at?:string|null;approved_by_name?:string|null;pdf_sha256?:string|null;verification_token?:string|null;snapshot:SectorSnapshot;introduction:string;conclusion:string};
 export type PlanReference = {activity_id:string;title:string;planned:string};
 const token = () => sessionStorage.getItem('rf_token');
 export async function api<T>(path:string, options:RequestInit={}):Promise<T> {
@@ -21,4 +21,12 @@ export async function download(id:string,format:'docx'|'pdf'|'modern-pdf'|'moder
   const res=await fetch(`/api/sector-documents/${id}/export/${format}`,{headers:{Authorization:'Bearer '+token()}});
   if(!res.ok) throw new Error(await res.text());
   const blob=await res.blob();const url=URL.createObjectURL(blob);const a=document.createElement('a');a.href=url;a.download=`izvjesce-${id}${format==='modern-pdf'?'-modern':format==='modern-letterhead-pdf'?'-modern-memorandum':''}.${format==='docx'?'docx':'pdf'}`;a.click();setTimeout(()=>URL.revokeObjectURL(url),2000);
+}
+
+export async function downloadArchived(id:string,documentNumber?:string|null){
+ const res=await fetch('/api/sector-documents/'+id+'/archived-pdf',{headers:{Authorization:'Bearer '+token()}});
+ if(!res.ok){let message='Neuspjelo preuzimanje';try{message=(await res.json()).error??message;}catch{}throw new Error(message);}
+ const url=URL.createObjectURL(await res.blob());
+ const link=document.createElement('a');link.href=url;link.download=(documentNumber??'odobreno-izvjesce')+'.pdf';
+ link.click();window.setTimeout(()=>URL.revokeObjectURL(url),3000);
 }
