@@ -119,6 +119,15 @@ class NumberingTests(unittest.TestCase):
                 self.assertIn("Održavanje VHF sustava", joined)
                 self.assertIn("2026-11-14", joined)
 
+    def test_unplanned_only_report_can_be_rendered(self):
+        data = fixture()
+        data.snapshot["sections"][0]["items"] = []
+        for render in (populate, populate_modern):
+            with self.subTest(renderer=render.__name__):
+                document = Document(io.BytesIO(render(data)))
+                joined = "\\n".join(p.text for p in document.paragraphs)
+                self.assertIn("Izvanredna intervencija", joined)
+
 
 if __name__ == "__main__":
     unittest.main()
