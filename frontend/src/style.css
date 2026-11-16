@@ -659,3 +659,52 @@ button:focus-visible,summary:focus-visible{outline:3px solid #e58d1a;outline-off
 .verify-ok{color:#256039!important;font-weight:750}
 .verify-bad{color:#ad341c!important;font-weight:750}
 @media(max-width:600px){.verify-details>div{grid-template-columns:1fr;gap:4px}.approval-dialog{padding:20px}}
+
+
+/* Quick capture for work outside the monthly plan */
+.rf-unplanned-panel{margin-bottom:20px;border:1px solid #e5c38e;border-left:4px solid #d85e08;background:#fffdf8}
+.rf-unplanned-panel .ux-intro{margin-bottom:14px}
+.rf-unplanned-mark{align-self:flex-start;background:#fff0d9;color:#8f460d;border:1px solid #e8c38c;border-radius:20px;padding:5px 10px;font-size:11px;font-weight:750;white-space:nowrap}
+.rf-unplanned-form{background:#fff8ed;border:1px solid #ead7ba;border-radius:8px;padding:16px;margin:12px 0 20px}
+.rf-unplanned-fields{display:grid;gap:12px}
+.rf-unplanned-fields label{display:grid;gap:6px;font-size:13px;font-weight:650;color:#433629}
+.rf-unplanned-fields input,.rf-unplanned-fields textarea,.rf-unplanned-fields select{width:100%}
+.rf-unplanned-meta{display:grid;grid-template-columns:minmax(170px,.65fr) minmax(240px,1.35fr);gap:14px}
+.rf-optional{font-size:11px;color:#786b5e;font-weight:400}
+.rf-unplanned-actions{display:flex;gap:9px;flex-wrap:wrap;margin-top:12px}
+.rf-unplanned-notice{font-size:13px;color:#32613c;margin:8px 0}
+.rf-unplanned-history{border-top:1px solid #e7ddcf;padding-top:14px}
+.rf-unplanned-history-head{display:flex;justify-content:space-between;align-items:center;gap:12px;margin-bottom:8px}
+.rf-unplanned-history-head h3{font-size:15px;margin:0 0 4px}
+.rf-unplanned-history-head p{font-size:12px;color:#75695e;margin:0}
+.rf-unplanned-history-head label{display:flex;align-items:center;gap:8px;font-size:12px}
+.rf-unplanned-history-head input{width:auto;min-width:145px}
+.rf-unplanned-empty{font-size:13px;color:#75695e;padding:8px 0}
+.rf-unplanned-list article{padding:12px 2px;border-bottom:1px solid #e9e0d5}
+.rf-unplanned-item-head{display:flex;justify-content:space-between;align-items:flex-start;gap:12px}
+.rf-unplanned-item-head time{display:block;color:#8a5a2c;font-size:11px;font-weight:700;margin-bottom:3px}
+.rf-unplanned-item-head h4{font-size:14px;margin:0;color:#30271f}
+.rf-unplanned-list article p{font-size:13px;line-height:1.55;white-space:pre-wrap;margin:7px 0;color:#51463b}
+.rf-unplanned-list article small{display:block;font-size:11px;color:#76695c;margin-top:4px}
+.rf-unplanned-list article small+small{margin-top:3px}
+.rf-parent-context{background:#fff2dc;border-left:3px solid #d85e08;padding:9px 12px;color:#59402b;margin:0}
+.rf-tree-toggle,.rf-tree-toggle-placeholder{width:25px;height:25px;flex:0 0 25px;display:inline-flex;align-items:center;justify-content:center}
+.rf-tree-toggle{border:0;background:transparent;color:#98500f;border-radius:5px;cursor:pointer;padding:2px}
+.rf-tree-toggle:hover{background:#ffedcf}
+.rf-registry-name{display:flex;align-items:center;gap:7px;min-width:0}
+.rf-registry-name>div{min-width:0}
+.report-unplanned{margin:20px 0 8px;padding:14px 16px;background:#fffaf1;border-left:3px solid #d85e08}
+.report-unplanned h4{margin:0 0 10px;color:#91480d;font-size:14px}
+.report-unplanned article{padding:9px 0;border-bottom:1px solid #eadfce}
+.report-unplanned article:last-child{border-bottom:0}
+.report-unplanned article>div{display:flex;gap:10px;align-items:baseline;flex-wrap:wrap}
+.report-unplanned time,.report-unplanned small{font-size:11px;color:#806b57}
+.report-unplanned p{margin:5px 0;white-space:pre-wrap;font-size:13px}
+.report-unplanned small{display:block;margin-top:3px}
+@media(max-width:650px){
+ .rf-unplanned-meta{grid-template-columns:1fr}
+ .rf-unplanned-history-head{align-items:flex-start;flex-direction:column}
+ .rf-unplanned-history-head label{width:100%;justify-content:space-between}
+ .rf-unplanned-history-head input{flex:1}
+ .rf-unplanned-panel{padding:14px}
+}
