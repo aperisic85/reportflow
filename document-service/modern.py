@@ -209,8 +209,8 @@ def populate_modern(payload, memorandum=False, approval=None):
                     f"Evidentirao/la: {author}" if author else ""
                 ] if x)
                 if meta:
-                    detail = paragraph(doc, meta, size=8, color=MUTED, after=5)
-                    detail.paragraph_format.left_indent = Cm(.15)
+                    meta_para = paragraph(doc, meta, size=8, color=MUTED, after=5)
+                    meta_para.paragraph_format.left_indent = Cm(.15)
 
     if payload.conclusion.strip():
         heading = paragraph(doc, "ZAKLJUČAK", size=11, color=AMBER, bold=True, after=8)
