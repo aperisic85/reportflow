@@ -250,6 +250,7 @@ async fn unplanned_activities(State(s):State<App>,h:HeaderMap,Query(p):Query<Unp
 async fn create_unplanned_activity(State(s):State<App>,h:HeaderMap,Json(p):Json<NewUnplannedActivity>)->ResultApi<Json<Value>> {
  let c=who(&s,&h).await?;guard_dept(&s,&c,p.department_id,"write").await?;
  let performed_on=NaiveDate::parse_from_str(&p.performed_on,"%Y-%m-%d").map_err(|_|bad("Nevaljan datum obavljanja posla"))?;
+ if !(2000..=2100).contains(&performed_on.year()){return Err(bad("Datum mora biti između 2000. i 2100. godine"));}
  let title=p.title.trim();let description=p.description.trim();
  if title.is_empty()||title.chars().count()>250||description.is_empty()||description.chars().count()>12000{return Err(bad("Naziv i opis posla su obavezni"));}
  let locked:bool=sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM department_documents WHERE department_id=$1 AND year=$2 AND month=$3 AND kind='report' AND status='submitted')")
@@ -272,6 +273,7 @@ async fn edit_unplanned_activity(State(s):State<App>,h:HeaderMap,Path(id):Path<U
  let dept:Uuid=row.get("department_id");let owner:Option<Uuid>=row.get("created_by");let old_date:NaiveDate=row.get("performed_on");
  guard_dept(&s,&c,dept,"write").await?;if c.role=="employee"&&owner!=Some(c.sub){return Err(forbidden());}
  let performed_on=NaiveDate::parse_from_str(&p.performed_on,"%Y-%m-%d").map_err(|_|bad("Nevaljan datum obavljanja posla"))?;
+ if !(2000..=2100).contains(&performed_on.year()){return Err(bad("Datum mora biti između 2000. i 2100. godine"));}
  let title=p.title.trim();let description=p.description.trim();
  if title.is_empty()||title.chars().count()>250||description.is_empty()||description.chars().count()>12000{return Err(bad("Naziv i opis posla su obavezni"));}
  for date in [old_date,performed_on] {
