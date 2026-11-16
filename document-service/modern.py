@@ -183,6 +183,35 @@ def populate_modern(payload, memorandum=False, approval=None):
                           bold=True, color=AMBER, size=9.6)
                 write_run(p, content, size=9.6)
 
+        unplanned = department.get("unplanned_items", [])
+        if unplanned:
+            heading = doc.add_paragraph()
+            heading.paragraph_format.space_before = Pt(12)
+            heading.paragraph_format.space_after = Pt(7)
+            heading.paragraph_format.keep_with_next = True
+            write_run(heading, "NEPLANIRANE AKTIVNOSTI", bold=True, color=AMBER, size=10)
+            line(heading, color="E6DFD6", size=5)
+            for entry in unplanned:
+                p = doc.add_paragraph()
+                p.paragraph_format.space_before = Pt(5)
+                p.paragraph_format.space_after = Pt(3)
+                p.paragraph_format.keep_with_next = True
+                write_run(p, str(entry.get("performed_on", "")) + "  ", bold=True, color=MUTED, size=9)
+                write_run(p, (entry.get("title") or "").strip(), bold=True, color=INK, size=9.8)
+                description = (entry.get("description") or "").strip()
+                if description:
+                    detail = paragraph(doc, description, size=9.2, after=3)
+                    detail.paragraph_format.left_indent = Cm(.15)
+                related = (entry.get("related_activity_title") or "").strip()
+                author = (entry.get("created_by_name") or "").strip()
+                meta = " · ".join(x for x in [
+                    f"Povezano s aktivnošću: {related}" if related else "",
+                    f"Evidentirao/la: {author}" if author else ""
+                ] if x)
+                if meta:
+                    meta_para = paragraph(doc, meta, size=8, color=MUTED, after=5)
+                    meta_para.paragraph_format.left_indent = Cm(.15)
+
     if payload.conclusion.strip():
         heading = paragraph(doc, "ZAKLJUČAK", size=11, color=AMBER, bold=True, after=8)
         heading.paragraph_format.space_before = Pt(18)

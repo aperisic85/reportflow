@@ -27,6 +27,11 @@ def fixture():
                     {"id": "c", "parent_id": None, "title": "Glavna aktivnost tri", "description": "", "content": ""},
                     {"id": "d", "parent_id": "c", "title": "Prva podaktivnost", "description": "", "content": "Izvršeno"},
                     {"id": "e", "parent_id": "c", "title": "Druga podaktivnost", "description": "", "content": ""},
+                ],
+                "unplanned_items": [
+                    {"id": "u1", "performed_on": "2026-11-14", "title": "Izvanredna intervencija",
+                     "description": "Zamijenjen neispravni uređaj.", "created_by_name": "Radnik",
+                     "related_activity_title": "Održavanje VHF sustava"}
                 ]
             }]
         })
@@ -101,6 +106,27 @@ class NumberingTests(unittest.TestCase):
                 self.assertIn("3.1", joined)
                 self.assertIn("Prva podaktivnost", joined)
                 self.assertIn("Mjesečna realizacija", joined)
+
+    def test_both_export_styles_include_unplanned_work(self):
+        data = fixture()
+        for render in (populate, populate_modern):
+            with self.subTest(renderer=render.__name__):
+                document = Document(io.BytesIO(render(data)))
+                joined = "\\n".join(p.text for p in document.paragraphs)
+                self.assertIn("neplanirane aktivnosti", joined.lower())
+                self.assertIn("Izvanredna intervencija", joined)
+                self.assertIn("Zamijenjen neispravni uređaj.", joined)
+                self.assertIn("Održavanje VHF sustava", joined)
+                self.assertIn("2026-11-14", joined)
+
+    def test_unplanned_only_report_can_be_rendered(self):
+        data = fixture()
+        data.snapshot["sections"][0]["items"] = []
+        for render in (populate, populate_modern):
+            with self.subTest(renderer=render.__name__):
+                document = Document(io.BytesIO(render(data)))
+                joined = "\\n".join(p.text for p in document.paragraphs)
+                self.assertIn("Izvanredna intervencija", joined)
 
 
 if __name__ == "__main__":

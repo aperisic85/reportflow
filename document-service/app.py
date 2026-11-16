@@ -65,6 +65,34 @@ def populate(payload: RenderRequest) -> bytes:
                 para.add_run(label).bold = True
                 para.add_run(content)
 
+        unplanned = section_data.get('unplanned_items', [])
+        if unplanned:
+            heading = doc.add_paragraph()
+            heading.paragraph_format.space_before = Pt(10)
+            heading.paragraph_format.keep_with_next = True
+            heading.add_run('Neplanirane aktivnosti').bold = True
+            for entry in unplanned:
+                p = doc.add_paragraph()
+                p.paragraph_format.left_indent = Cm(0.15)
+                p.paragraph_format.space_after = Pt(2)
+                p.add_run(str(entry.get('performed_on', '')) + '  ').bold = True
+                p.add_run(str(entry.get('title', '')).strip()).bold = True
+                description = (entry.get('description') or '').strip()
+                if description:
+                    detail = doc.add_paragraph(description)
+                    detail.paragraph_format.left_indent = Cm(0.45)
+                    detail.paragraph_format.space_after = Pt(2)
+                related = (entry.get('related_activity_title') or '').strip()
+                author = (entry.get('created_by_name') or '').strip()
+                meta = ' · '.join(x for x in [
+                    f'Povezano s aktivnošću: {related}' if related else '',
+                    f'Evidentirao/la: {author}' if author else ''
+                ] if x)
+                if meta:
+                    meta_para = doc.add_paragraph(meta)
+                    meta_para.paragraph_format.left_indent = Cm(0.45)
+                    meta_para.paragraph_format.space_after = Pt(5)
+
     if payload.conclusion.strip():
         p = doc.add_paragraph()
         p.paragraph_format.space_before = Pt(15)

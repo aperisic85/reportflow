@@ -2,7 +2,7 @@ use std::{env, sync::Arc, collections::HashSet};
 use argon2::{Argon2, PasswordHash, PasswordHasher, PasswordVerifier};
 use argon2::password_hash::SaltString;
 use axum::{body::Body, extract::{Path, Query, State}, http::{header, HeaderMap, StatusCode}, response::{IntoResponse, Response}, routing::{get, post, patch}, Json, Router};
-use chrono::{Utc,DateTime};
+use chrono::{Utc,DateTime,NaiveDate,Datelike};
 use sha2::{Sha256,Digest};
 use jsonwebtoken::{decode, encode, DecodingKey, EncodingKey, Header, Validation};
 use rand_core::OsRng;
@@ -217,6 +217,78 @@ async fn dashboard(State(s):State<App>,h:HeaderMap,Query(p):Query<DashboardFilte
    "updated_at":r.get::<chrono::DateTime<Utc>,_>("updated_at")
   })).collect::<Vec<_>>()
  })))
+}
+
+#[derive(Deserialize)] struct UnplannedFilter {department_id:Uuid,year:i32,month:i32}
+async fn unplanned_activities(State(s):State<App>,h:HeaderMap,Query(p):Query<UnplannedFilter>)->ResultApi<Json<Value>> {
+ let c=who(&s,&h).await?;guard_dept(&s,&c,p.department_id,"read").await?;
+ if !(2000..=2100).contains(&p.year)||!(1..=12).contains(&p.month){return Err(bad("Nevaljan mjesec ili godina"));}
+ let rows=sqlx::query(r#"
+ SELECT e.id,e.performed_on::text AS performed_on,e.title,e.description,e.related_activity_id,
+        a.title AS related_activity_title,e.created_at,e.updated_at,e.created_by,
+        u.full_name AS created_by_name
+ FROM unplanned_activity_entries e
+ LEFT JOIN activities a ON a.id=e.related_activity_id
+ LEFT JOIN users u ON u.id=e.created_by
+ WHERE e.department_id=$1
+   AND e.performed_on>=make_date($2,$3,1)
+   AND e.performed_on<(make_date($2,$3,1)+interval '1 month')::date
+ ORDER BY e.performed_on DESC,e.created_at DESC
+ "#).bind(p.department_id).bind(p.year).bind(p.month).fetch_all(&s.db).await.map_err(db)?;
+ Ok(Json(Value::Array(rows.iter().map(|r|json!({
+  "id":r.get::<Uuid,_>("id"),"performed_on":r.get::<String,_>("performed_on"),
+  "title":r.get::<String,_>("title"),"description":r.get::<String,_>("description"),
+  "related_activity_id":r.get::<Option<Uuid>,_>("related_activity_id"),
+  "related_activity_title":r.get::<Option<String>,_>("related_activity_title"),
+  "created_at":r.get::<DateTime<Utc>,_>("created_at"),
+  "updated_at":r.get::<DateTime<Utc>,_>("updated_at"),
+  "created_by":r.get::<Option<Uuid>,_>("created_by"),
+  "created_by_name":r.get::<Option<String>,_>("created_by_name")
+ })).collect())))
+}
+#[derive(Deserialize)] struct NewUnplannedActivity {department_id:Uuid,performed_on:String,title:String,description:String,related_activity_id:Option<Uuid>}
+async fn create_unplanned_activity(State(s):State<App>,h:HeaderMap,Json(p):Json<NewUnplannedActivity>)->ResultApi<Json<Value>> {
+ let c=who(&s,&h).await?;guard_dept(&s,&c,p.department_id,"write").await?;
+ let performed_on=NaiveDate::parse_from_str(&p.performed_on,"%Y-%m-%d").map_err(|_|bad("Nevaljan datum obavljanja posla"))?;
+ if !(2000..=2100).contains(&performed_on.year()){return Err(bad("Datum mora biti između 2000. i 2100. godine"));}
+ let title=p.title.trim();let description=p.description.trim();
+ if title.is_empty()||title.chars().count()>250||description.is_empty()||description.chars().count()>12000{return Err(bad("Naziv i opis posla su obavezni"));}
+ let locked:bool=sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM department_documents WHERE department_id=$1 AND year=$2 AND month=$3 AND kind='report' AND status='submitted')")
+  .bind(p.department_id).bind(performed_on.year()).bind(performed_on.month() as i32).fetch_one(&s.db).await.map_err(db)?;
+ if locked{return Err(bad("Mjesečno izvješće je predano; voditelj ga prvo mora vratiti u nacrt"));}
+ if let Some(activity_id)=p.related_activity_id {
+  let linked:bool=sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM activities WHERE id=$1 AND department_id=$2)")
+   .bind(activity_id).bind(p.department_id).fetch_one(&s.db).await.map_err(db)?;
+  if !linked{return Err(bad("Povezana aktivnost mora pripadati istom odjelu"));}
+ }
+ let id:Uuid=sqlx::query_scalar("INSERT INTO unplanned_activity_entries(department_id,performed_on,title,description,related_activity_id,created_by,updated_by) VALUES($1,$2,$3,$4,$5,$6,$6) RETURNING id")
+  .bind(p.department_id).bind(performed_on).bind(title).bind(description).bind(p.related_activity_id).bind(c.sub).fetch_one(&s.db).await.map_err(db)?;
+ audit(&s,&c,"unplanned_activity.create",Some(id)).await;Ok(Json(json!({"id":id})))
+}
+#[derive(Deserialize)] struct EditUnplannedActivity {performed_on:String,title:String,description:String,related_activity_id:Option<Uuid>}
+async fn edit_unplanned_activity(State(s):State<App>,h:HeaderMap,Path(id):Path<Uuid>,Json(p):Json<EditUnplannedActivity>)->ResultApi<Json<Value>> {
+ let c=who(&s,&h).await?;
+ let row=sqlx::query("SELECT department_id,created_by,performed_on FROM unplanned_activity_entries WHERE id=$1 FOR UPDATE")
+  .bind(id).fetch_optional(&s.db).await.map_err(db)?.ok_or_else(||bad("Evidencija nije pronađena"))?;
+ let dept:Uuid=row.get("department_id");let owner:Option<Uuid>=row.get("created_by");let old_date:NaiveDate=row.get("performed_on");
+ guard_dept(&s,&c,dept,"write").await?;if c.role=="employee"&&owner!=Some(c.sub){return Err(forbidden());}
+ let performed_on=NaiveDate::parse_from_str(&p.performed_on,"%Y-%m-%d").map_err(|_|bad("Nevaljan datum obavljanja posla"))?;
+ if !(2000..=2100).contains(&performed_on.year()){return Err(bad("Datum mora biti između 2000. i 2100. godine"));}
+ let title=p.title.trim();let description=p.description.trim();
+ if title.is_empty()||title.chars().count()>250||description.is_empty()||description.chars().count()>12000{return Err(bad("Naziv i opis posla su obavezni"));}
+ for date in [old_date,performed_on] {
+  let locked:bool=sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM department_documents WHERE department_id=$1 AND year=$2 AND month=$3 AND kind='report' AND status='submitted')")
+   .bind(dept).bind(date.year()).bind(date.month() as i32).fetch_one(&s.db).await.map_err(db)?;
+  if locked{return Err(bad("Izvješće za odabrani mjesec je predano; voditelj ga prvo mora vratiti u nacrt"));}
+ }
+ if let Some(activity_id)=p.related_activity_id {
+  let linked:bool=sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM activities WHERE id=$1 AND department_id=$2)")
+   .bind(activity_id).bind(dept).fetch_one(&s.db).await.map_err(db)?;
+  if !linked{return Err(bad("Povezana aktivnost mora pripadati istom odjelu"));}
+ }
+ sqlx::query("UPDATE unplanned_activity_entries SET performed_on=$2,title=$3,description=$4,related_activity_id=$5,updated_by=$6,updated_at=now() WHERE id=$1")
+  .bind(id).bind(performed_on).bind(title).bind(description).bind(p.related_activity_id).bind(c.sub).execute(&s.db).await.map_err(db)?;
+ audit(&s,&c,"unplanned_activity.update",Some(id)).await;Ok(Json(json!({"ok":true})))
 }
 
 #[derive(Deserialize)] struct FilterDept {department_id:Uuid}
@@ -535,16 +607,36 @@ async fn save_department_doc(State(s):State<App>,h:HeaderMap,Json(p):Json<Submit
  if p.status=="submitted" && old!="submitted" {
   let rows=sqlx::query("SELECT a.id,a.title,a.description,a.parent_id,a.type,a.status,COALESCE(u.content,'') AS content,COALESCE(u.progress,'in_progress') AS progress FROM activities a LEFT JOIN activity_updates u ON u.activity_id=a.id AND u.year=$2 AND u.month=$3 AND u.kind=$4 WHERE a.department_id=$1 AND COALESCE(u.include_in_document,true)=true ORDER BY a.sort_order,a.created_at")
    .bind(p.department_id).bind(p.year).bind(p.month).bind(&p.kind).fetch_all(&mut *tx).await.map_err(db)?;
-  if rows.is_empty(){return Err(bad("Nema aktivnosti uključenih u dokument"));}
+  let unplanned_rows=if p.kind=="report" {
+   sqlx::query(r#"
+    SELECT e.id,e.performed_on::text AS performed_on,e.title,e.description,
+           e.related_activity_id,a.title AS related_activity_title,u.full_name AS created_by_name
+    FROM unplanned_activity_entries e
+    LEFT JOIN activities a ON a.id=e.related_activity_id
+    LEFT JOIN users u ON u.id=e.created_by
+    WHERE e.department_id=$1
+      AND e.performed_on>=make_date($2,$3,1)
+      AND e.performed_on<(make_date($2,$3,1)+interval '1 month')::date
+    ORDER BY e.performed_on,e.created_at
+   "#).bind(p.department_id).bind(p.year).bind(p.month).fetch_all(&mut *tx).await.map_err(db)?
+  } else {Vec::new()};
+  if rows.is_empty()&&unplanned_rows.is_empty(){return Err(bad("Nema aktivnosti ni evidentiranih neplaniranih poslova za ovaj dokument"));}
   let items:Vec<Value>=rows.iter().map(|r|json!({
    "id":r.get::<Uuid,_>("id"),"title":r.get::<String,_>("title"),"description":r.get::<String,_>("description"),
    "parent_id":r.get::<Option<Uuid>,_>("parent_id"),"type":r.get::<String,_>("type"),"status":r.get::<String,_>("status"),
    "content":r.get::<String,_>("content"),"progress":r.get::<String,_>("progress")
   })).collect();
+  let unplanned_items:Vec<Value>=unplanned_rows.iter().map(|r|json!({
+   "id":r.get::<Uuid,_>("id"),"performed_on":r.get::<String,_>("performed_on"),
+   "title":r.get::<String,_>("title"),"description":r.get::<String,_>("description"),
+   "related_activity_id":r.get::<Option<Uuid>,_>("related_activity_id"),
+   "related_activity_title":r.get::<Option<String>,_>("related_activity_title"),
+   "created_by_name":r.get::<Option<String>,_>("created_by_name")
+  })).collect();
   let next:i32=sqlx::query_scalar("SELECT COALESCE(MAX(version),0)+1 FROM department_document_versions WHERE department_document_id=$1")
    .bind(id).fetch_one(&mut *tx).await.map_err(db)?;
   sqlx::query("INSERT INTO department_document_versions(department_document_id,version,snapshot,submitted_by) VALUES($1,$2,$3,$4)")
-   .bind(id).bind(next).bind(json!({"department_id":p.department_id,"year":p.year,"month":p.month,"kind":p.kind,"items":items})).bind(c.sub).execute(&mut *tx).await.map_err(db)?;
+   .bind(id).bind(next).bind(json!({"department_id":p.department_id,"year":p.year,"month":p.month,"kind":p.kind,"items":items,"unplanned_items":unplanned_items})).bind(c.sub).execute(&mut *tx).await.map_err(db)?;
   version=Some(next);
  }
  if p.status=="submitted" {
@@ -752,8 +844,9 @@ async fn build_sector(State(s):State<App>,h:HeaderMap,Json(p):Json<BuildSector>)
   let source_submitted_at:chrono::DateTime<Utc>=version_row.get("submitted_at");
   let source_submitted_by:String=version_row.get("submitted_by_name");
   let items=immutable.get("items").and_then(Value::as_array).ok_or_else(||bad("Predana verzija nema popis aktivnosti"))?;
-  if items.is_empty(){return Err(bad("Predana verzija odjela nema aktivnosti"));}
-  sections.push(json!({"department_id":dept_id,"code":d.get::<String,_>("code"),"name":d.get::<String,_>("name"),"source_version":source_version,"source_submitted_at":source_submitted_at,"source_submitted_by":source_submitted_by,"items":items}));
+  let unplanned_items=immutable.get("unplanned_items").and_then(Value::as_array).cloned().unwrap_or_default();
+  if items.is_empty()&&unplanned_items.is_empty(){return Err(bad("Predana verzija odjela nema aktivnosti"));}
+  sections.push(json!({"department_id":dept_id,"code":d.get::<String,_>("code"),"name":d.get::<String,_>("name"),"source_version":source_version,"source_submitted_at":source_submitted_at,"source_submitted_by":source_submitted_by,"items":items,"unplanned_items":unplanned_items}));
  }
  let title=format!("{} značajnijih aktivnosti za {:02}.{}.",if p.kind=="plan" {"PLAN"}else{"IZVJEŠĆE"},p.month,p.year);
  let snapshot=json!({"year":p.year,"month":p.month,"kind":p.kind,"title":title,"sections":sections});
@@ -803,8 +896,9 @@ async fn edit_sector(State(s):State<App>,h:HeaderMap,Path(id):Path<Uuid>,Json(p)
   }
   let mut copy=source.clone();copy["items"]=json!(cleaned);new_sections.push(copy);
  }
- if seen_items.is_empty() {return Err(bad("Sektorski dokument mora sadržavati barem jednu stavku"));}
- if new_sections.iter().all(|s| s.get("items").and_then(Value::as_array).map(|a|a.is_empty()).unwrap_or(true)) {return Err(bad("Završni dokument mora sadržavati barem jednu stavku"));}
+ let has_unplanned=new_sections.iter().any(|s|s.get("unplanned_items").and_then(Value::as_array).map(|a|!a.is_empty()).unwrap_or(false));
+ if seen_items.is_empty()&&!has_unplanned {return Err(bad("Sektorski dokument mora sadržavati barem jednu stavku"));}
+ if new_sections.iter().all(|s|s.get("items").and_then(Value::as_array).map(|a|a.is_empty()).unwrap_or(true)&&s.get("unplanned_items").and_then(Value::as_array).map(|a|a.is_empty()).unwrap_or(true)) {return Err(bad("Završni dokument mora sadržavati barem jednu stavku"));}
  let mut snapshot=old; snapshot["sections"]=json!(new_sections);
  let mut tx=s.db.begin().await.map_err(db)?;
  let n=sqlx::query("UPDATE sector_documents SET snapshot=$2,introduction=$3,conclusion=$4 WHERE id=$1 AND status='draft' AND sector_id=$5")
@@ -937,6 +1031,8 @@ async fn health()->Json<Value> {Json(json!({"status":"ok"}))}
   .route("/api/users",get(users).post(create_user)).route("/api/users/{id}",patch(update_user))
   .route("/api/dashboard",get(dashboard))
   .route("/api/activities",get(activities).post(create_activity)).route("/api/activities/{id}",patch(edit_activity))
+  .route("/api/unplanned-activities",get(unplanned_activities).post(create_unplanned_activity))
+  .route("/api/unplanned-activities/{id}",patch(edit_unplanned_activity))
   .route("/api/activity-search",get(search_activities))
   .route("/api/activities/{id}/history",get(activity_history))
   .route("/api/activities/{id}/edit-details",patch(rename_activity))
