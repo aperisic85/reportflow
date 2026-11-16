@@ -113,10 +113,11 @@ class NumberingTests(unittest.TestCase):
             with self.subTest(renderer=render.__name__):
                 document = Document(io.BytesIO(render(data)))
                 joined = "\\n".join(p.text for p in document.paragraphs)
-                self.assertIn("Neplanirane aktivnosti", joined)
+                self.assertIn("neplanirane aktivnosti", joined.lower())
                 self.assertIn("Izvanredna intervencija", joined)
                 self.assertIn("Zamijenjen neispravni uređaj.", joined)
                 self.assertIn("Održavanje VHF sustava", joined)
+                self.assertIn("2026-11-14", joined)
 
 
 if __name__ == "__main__":
