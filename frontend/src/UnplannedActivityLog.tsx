@@ -1,7 +1,7 @@
-import {useEffect,useState} from 'react';
+import {useEffect,useState,type FormEvent} from 'react';
 import {api,post,patch,q,type Activity,type UnplannedActivity} from './api';
 
-type Props={departmentId:string;activities:Activity[];canWrite:boolean;currentUserId:string;canManage:boolean};
+type Props={departmentId:string;activities:Activity[];canWrite:boolean;currentUserId:string;canManage:boolean;onSaved?:()=>Promise<void>};
 const localDate=()=>{
  const d=new Date();
  return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0');
@@ -9,7 +9,7 @@ const localDate=()=>{
 const monthOf=(date:string)=>date.slice(0,7);
 const dateLabel=(date:string)=>new Date(date+'T12:00:00').toLocaleDateString('hr-HR',{dateStyle:'medium'});
 
-export default function UnplannedActivityLog({departmentId,activities,canWrite,currentUserId,canManage}:Props){
+export default function UnplannedActivityLog({departmentId,activities,canWrite,currentUserId,canManage,onSaved}:Props){
  const [period,setPeriod]=useState(()=>monthOf(localDate()));
  const [performedOn,setPerformedOn]=useState(localDate());
  const [title,setTitle]=useState('');
@@ -33,13 +33,13 @@ export default function UnplannedActivityLog({departmentId,activities,canWrite,c
  const reset=()=>{
   setEditingId(null);setPerformedOn(localDate());setTitle('');setDescription('');setRelatedActivityId('');
  };
- const save=async(e:React.FormEvent)=>{
+ const save=async(e:FormEvent)=>{
   e.preventDefault();setBusy(true);setError('');setNotice('');
   try{
    const payload={performed_on:performedOn,title:title.trim(),description:description.trim(),related_activity_id:relatedActivityId||null,...(!editingId?{department_id:departmentId}:{})};
    if(editingId)await patch('/unplanned-activities/'+editingId,payload);
    else await post('/unplanned-activities',payload);
-   setPeriod(monthOf(performedOn));reset();setNotice('Obavljeni posao je evidentiran.');
+   setPeriod(monthOf(performedOn));reset();setNotice('Obavljeni posao je evidentiran.');await onSaved?.();
   }catch(e){setError(e instanceof Error?e.message:String(e));}
   finally{setBusy(false);}
  };
