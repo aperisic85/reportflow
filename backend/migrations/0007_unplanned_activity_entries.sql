@@ -1,7 +1,7 @@
 CREATE TABLE unplanned_activity_entries (
  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
  department_id UUID NOT NULL REFERENCES departments(id),
- performed_on DATE NOT NULL,
+ performed_on DATE NOT NULL CHECK (performed_on >= DATE '2000-01-01' AND performed_on < DATE '2101-01-01'),
  title TEXT NOT NULL CHECK (char_length(title) BETWEEN 1 AND 250),
  description TEXT NOT NULL CHECK (char_length(description) BETWEEN 1 AND 12000),
  related_activity_id UUID REFERENCES activities(id) ON DELETE SET NULL,
