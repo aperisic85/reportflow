@@ -178,7 +178,7 @@ function App(){
      {newParent&&<p className="wide rf-parent-context">Nadređena aktivnost: <strong>{activities.find(a=>a.id===newParent)?.title??'Odabrana aktivnost'}</strong></p>}
      <label className="wide">Naziv aktivnosti<input required value={newTitle} onChange={e=>setNewTitle(e.target.value)} placeholder="Npr. Modernizacija VHF sustava"/></label>
      <label className="wide">Opis aktivnosti<textarea rows={3} value={newDescription} onChange={e=>setNewDescription(e.target.value)} placeholder="Kratki opis posla ili projekta"/></label>
-     <label>Vrsta aktivnosti<select value={newType} onChange={e=>setNewType(e.target.value)}><option value="ongoing">Trajna aktivnost</option><option value="project">Projekt</option><option value="one_off">Jednokratna aktivnost</option></select></label>
+     <label>Vrsta aktivnosti<select value={newType} onChange={e=>setNewType(e.target.value)}><option value="ongoing">Trajna aktivnost</option><option value="project">Projekt</option></select></label>
      <div className="wide registry-create-actions"><button className="primary" type="submit" disabled={loading}><Plus size={17}/> Spremi aktivnost</button><button className="outline" type="button" onClick={()=>setShowNewActivity(false)}>Odustani</button></div>
     </form>}
     <div className="ux-toolbar"><label>Pronađi aktivnost<input value={registrySearch} onChange={e=>setRegistrySearch(e.target.value)} placeholder="Naziv ili opis projekta / aktivnosti"/></label>
@@ -193,7 +193,7 @@ function App(){
       </div>
       <div className="ux-registry-actions">
        <span className="simple-registry-status">{statusNames[a.status]}</span>
-       {canEdit&&<button type="button" className="outline compact" onClick={()=>{setNewParent(a.id);setNewTitle('');setNewDescription('');setShowNewActivity(true);}}><Plus size={14}/> Podaktivnost</button>}
+       {canEdit&&<button type="button" className="outline compact" onClick={()=>{setNewParent(a.id);setNewTitle('');setNewDescription('');setCollapsedRegistry(ids=>ids.filter(id=>id!==a.id));setShowNewActivity(true);}}><Plus size={14}/> Podaktivnost</button>}
        <button type="button" className="outline compact" onClick={()=>{setChatActivityId(a.id);setChatThreadId(null);}}><MessageCircle size={14}/> Chat</button>
        {canSubmit&&<button type="button" className="outline compact" onClick={()=>setEditActivityId(id=>id===a.id?null:a.id)}>Uredi</button>}
        <button type="button" className="outline compact" onClick={()=>toggleRegistryDetails(a.id)}>{registryDetails.includes(a.id)?'Sakrij detalje':'Detalji'}</button>
