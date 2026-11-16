@@ -83,7 +83,7 @@ export default function UnplannedActivityLog({departmentId,activities,canWrite,c
   </form>}
   <div className="rf-unplanned-history">
    <div className="rf-unplanned-history-head"><div><h3>Evidentirani neplanirani poslovi</h3><p>{items.length} zapisa u odabranom mjesecu</p></div>
-    <label>Mjesec <input type="month" value={period} onChange={e=>setPeriod(e.target.value)}/></label>
+    <label>Mjesec <input type="month" value={period} onChange={e=>{if(e.target.value)setPeriod(e.target.value);}}/></label>
    </div>
    {items.length===0?<p className="rf-unplanned-empty">Nema evidentiranih neplaniranih poslova za ovaj mjesec.</p>:
     <div className="rf-unplanned-list">{items.map(item=><article key={item.id}>
