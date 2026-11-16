@@ -179,7 +179,7 @@ function App(){
      <label className="wide">Naziv aktivnosti<input required value={newTitle} onChange={e=>setNewTitle(e.target.value)} placeholder="Npr. Modernizacija VHF sustava"/></label>
      <label className="wide">Opis aktivnosti<textarea rows={3} value={newDescription} onChange={e=>setNewDescription(e.target.value)} placeholder="Kratki opis posla ili projekta"/></label>
      <label>Vrsta aktivnosti<select value={newType} onChange={e=>setNewType(e.target.value)}><option value="ongoing">Trajna aktivnost</option><option value="project">Projekt</option></select></label>
-     <div className="wide registry-create-actions"><button className="primary" type="submit" disabled={loading}><Plus size={17}/> Spremi aktivnost</button><button className="outline" type="button" onClick={()=>setShowNewActivity(false)}>Odustani</button></div>
+     <div className="wide registry-create-actions"><button className="primary" type="submit" disabled={loading}><Plus size={17}/> Spremi aktivnost</button><button className="outline" type="button" onClick={()=>{setShowNewActivity(false);setNewParent('');}}>Odustani</button></div>
     </form>}
     <div className="ux-toolbar"><label>Pronađi aktivnost<input value={registrySearch} onChange={e=>setRegistrySearch(e.target.value)} placeholder="Naziv ili opis projekta / aktivnosti"/></label>
      <button type="button" className="outline" onClick={()=>setTab('entries')}>Izrada mjesečnog plana/izvješća</button>
