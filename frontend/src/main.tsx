@@ -104,7 +104,7 @@ function App(){
   }
   return false;
  };
- const visibleRegistry=treeOrder(activities).filter(a=>!hiddenByCollapsedParent(a)&&(!normalizedRegistrySearch||
+ const visibleRegistry=treeOrder(activities).filter(a=>(normalizedRegistrySearch||!hiddenByCollapsedParent(a))&&(!normalizedRegistrySearch||
   (a.title+' '+a.description).toLocaleLowerCase('hr').includes(normalizedRegistrySearch)));
  const toggleRegistryDetails=(id:string)=>setRegistryDetails(ids=>ids.includes(id)?ids.filter(x=>x!==id):[...ids,id]);
  // The preview must use the same defaults as the backend document generator.
