@@ -708,3 +708,22 @@ button:focus-visible,summary:focus-visible{outline:3px solid #e58d1a;outline-off
  .rf-unplanned-history-head input{flex:1}
  .rf-unplanned-panel{padding:14px}
 }
+
+
+/* Selection of unplanned entries for the monthly report */
+.rf-report-unplanned-select{margin-top:22px;padding:16px 18px;background:#fffaf1;border:1px solid #ead7ba;border-left:4px solid #d85e08;border-radius:8px}
+.rf-report-unplanned-head{display:flex;justify-content:space-between;align-items:flex-start;gap:16px;margin-bottom:10px}
+.rf-report-unplanned-head h3{font-size:15px;margin:0 0 4px;color:#81420f}
+.rf-report-unplanned-head p,.rf-report-unplanned-note{font-size:12px;color:#75695e;margin:0}
+.rf-report-unplanned-head>strong{font-size:12px;color:#81501f;white-space:nowrap}
+.rf-report-unplanned-select article{display:flex;justify-content:space-between;align-items:flex-start;gap:18px;padding:12px 0;border-top:1px solid #eadfce}
+.rf-report-unplanned-select article.is-excluded .rf-report-unplanned-details{opacity:.58}
+.rf-report-unplanned-details{min-width:0}
+.rf-report-unplanned-details time,.rf-report-unplanned-details small{display:block;font-size:11px;color:#806b57}
+.rf-report-unplanned-details strong{display:block;font-size:14px;color:#30271f;margin-top:2px}
+.rf-report-unplanned-details p{font-size:13px;line-height:1.5;white-space:pre-wrap;margin:5px 0;color:#51463b}
+.rf-report-unplanned-details small+small{margin-top:3px}
+.rf-report-unplanned-toggle{display:flex;align-items:center;gap:8px;flex:0 0 auto;font-size:12px;font-weight:650;color:#59402b;white-space:nowrap}
+.rf-report-unplanned-toggle input{width:17px;height:17px;accent-color:#d85e08}
+.rf-report-unplanned-note{margin-top:10px}
+@media(max-width:650px){.rf-report-unplanned-head,.rf-report-unplanned-select article{flex-direction:column}.rf-report-unplanned-toggle{white-space:normal}}

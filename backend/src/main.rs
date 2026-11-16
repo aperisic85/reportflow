@@ -224,7 +224,7 @@ async fn unplanned_activities(State(s):State<App>,h:HeaderMap,Query(p):Query<Unp
  let c=who(&s,&h).await?;guard_dept(&s,&c,p.department_id,"read").await?;
  if !(2000..=2100).contains(&p.year)||!(1..=12).contains(&p.month){return Err(bad("Nevaljan mjesec ili godina"));}
  let rows=sqlx::query(r#"
- SELECT e.id,e.performed_on::text AS performed_on,e.title,e.description,e.related_activity_id,
+ SELECT e.id,e.performed_on::text AS performed_on,e.title,e.description,e.related_activity_id,e.include_in_document,
         a.title AS related_activity_title,e.created_at,e.updated_at,e.created_by,
         u.full_name AS created_by_name
  FROM unplanned_activity_entries e
@@ -240,6 +240,7 @@ async fn unplanned_activities(State(s):State<App>,h:HeaderMap,Query(p):Query<Unp
   "title":r.get::<String,_>("title"),"description":r.get::<String,_>("description"),
   "related_activity_id":r.get::<Option<Uuid>,_>("related_activity_id"),
   "related_activity_title":r.get::<Option<String>,_>("related_activity_title"),
+  "include_in_document":r.get::<bool,_>("include_in_document"),
   "created_at":r.get::<DateTime<Utc>,_>("created_at"),
   "updated_at":r.get::<DateTime<Utc>,_>("updated_at"),
   "created_by":r.get::<Option<Uuid>,_>("created_by"),
@@ -291,6 +292,25 @@ async fn edit_unplanned_activity(State(s):State<App>,h:HeaderMap,Path(id):Path<U
  audit(&s,&c,"unplanned_activity.update",Some(id)).await;Ok(Json(json!({"ok":true})))
 }
 
+
+#[derive(Deserialize)] struct SetUnplannedInclusion {include_in_document:bool}
+async fn set_unplanned_inclusion(State(s):State<App>,h:HeaderMap,Path(id):Path<Uuid>,Json(p):Json<SetUnplannedInclusion>)->ResultApi<Json<Value>> {
+ let c=who(&s,&h).await?;
+ if c.role!="manager" {return Err(forbidden());}
+ let mut tx=s.db.begin().await.map_err(db)?;
+ let row=sqlx::query("SELECT department_id,performed_on FROM unplanned_activity_entries WHERE id=$1 FOR UPDATE")
+  .bind(id).fetch_optional(&mut *tx).await.map_err(db)?.ok_or_else(||bad("Evidencija nije pronađena"))?;
+ let dept:Uuid=row.get("department_id");let performed_on:NaiveDate=row.get("performed_on");
+ guard_dept(&s,&c,dept,"manage").await?;
+ let locked:bool=sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM department_documents WHERE department_id=$1 AND year=$2 AND month=$3 AND kind='report' AND status='submitted')")
+  .bind(dept).bind(performed_on.year()).bind(performed_on.month() as i32).fetch_one(&mut *tx).await.map_err(db)?;
+ if locked {return Err(bad("Izvješće je već predano; voditelj ga prvo mora vratiti u nacrt"));}
+ sqlx::query("UPDATE unplanned_activity_entries SET include_in_document=$2,updated_by=$3,updated_at=now() WHERE id=$1")
+  .bind(id).bind(p.include_in_document).bind(c.sub).execute(&mut *tx).await.map_err(db)?;
+ tx.commit().await.map_err(db)?;
+ audit(&s,&c,if p.include_in_document {"unplanned_activity.include"} else {"unplanned_activity.exclude"},Some(id)).await;
+ Ok(Json(json!({"ok":true,"include_in_document":p.include_in_document})))
+}
 #[derive(Deserialize)] struct FilterDept {department_id:Uuid}
 async fn activities(State(s):State<App>,h:HeaderMap,Query(p):Query<FilterDept>)->ResultApi<Json<Value>> {
  let c=who(&s,&h).await?; guard_dept(&s,&c,p.department_id,"read").await?;
@@ -615,6 +635,7 @@ async fn save_department_doc(State(s):State<App>,h:HeaderMap,Json(p):Json<Submit
     LEFT JOIN activities a ON a.id=e.related_activity_id
     LEFT JOIN users u ON u.id=e.created_by
     WHERE e.department_id=$1
+      AND e.include_in_document=true
       AND e.performed_on>=make_date($2,$3,1)
       AND e.performed_on<(make_date($2,$3,1)+interval '1 month')::date
     ORDER BY e.performed_on,e.created_at
@@ -1033,6 +1054,7 @@ async fn health()->Json<Value> {Json(json!({"status":"ok"}))}
   .route("/api/activities",get(activities).post(create_activity)).route("/api/activities/{id}",patch(edit_activity))
   .route("/api/unplanned-activities",get(unplanned_activities).post(create_unplanned_activity))
   .route("/api/unplanned-activities/{id}",patch(edit_unplanned_activity))
+  .route("/api/unplanned-activities/{id}/inclusion",patch(set_unplanned_inclusion))
   .route("/api/activity-search",get(search_activities))
   .route("/api/activities/{id}/history",get(activity_history))
   .route("/api/activities/{id}/edit-details",patch(rename_activity))
