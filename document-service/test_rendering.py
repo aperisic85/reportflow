@@ -31,7 +31,9 @@ def fixture():
                 "unplanned_items": [
                     {"id": "u1", "performed_on": "2026-11-14", "title": "Izvanredna intervencija",
                      "description": "Zamijenjen neispravni uređaj.", "created_by_name": "Radnik",
-                     "related_activity_title": "Održavanje VHF sustava"}
+                     "related_activity_id": "c", "related_activity_title": "Glavna aktivnost tri"},
+                    {"id": "u2", "performed_on": "2026-11-15", "title": "Samostalni posao",
+                     "description": "Obavljen zaseban posao.", "created_by_name": "Radnik"}
                 ]
             }]
         })
@@ -113,11 +115,13 @@ class NumberingTests(unittest.TestCase):
             with self.subTest(renderer=render.__name__):
                 document = Document(io.BytesIO(render(data)))
                 joined = "\\n".join(p.text for p in document.paragraphs)
-                self.assertIn("neplanirane aktivnosti", joined.lower())
+                self.assertIn("neplanirani poslovi", joined.lower())
                 self.assertIn("Izvanredna intervencija", joined)
                 self.assertIn("Zamijenjen neispravni uređaj.", joined)
-                self.assertIn("Održavanje VHF sustava", joined)
+                self.assertIn("Samostalni posao", joined)
                 self.assertIn("2026-11-14", joined)
+                self.assertLess(joined.index("Glavna aktivnost tri"), joined.index("Izvanredna intervencija"))
+                self.assertLess(joined.index("Izvanredna intervencija"), joined.index("Prva podaktivnost"))
 
     def test_unplanned_only_report_can_be_rendered(self):
         data = fixture()

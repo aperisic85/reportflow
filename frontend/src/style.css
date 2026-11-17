@@ -764,3 +764,24 @@ button:focus-visible,summary:focus-visible{outline:3px solid #e58d1a;outline-off
 .rf-report-unplanned-empty{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:14px;border:1px dashed #d8cfc2;border-radius:8px;background:#faf8f5}
 .rf-report-unplanned-empty p{margin:0;color:#6d6257;font-size:13px}
 @media(max-width:650px){.rf-report-unplanned-controls,.rf-report-unplanned-empty{align-items:flex-start;flex-direction:column}}
+
+
+/* Unplanned jobs linked to an activity are rendered as nested sub-items. */
+.rf-linked-unplanned-list{margin:0 0 12px 18px;padding-left:14px;border-left:2px solid #e7c99f;display:grid;gap:8px}
+.rf-linked-unplanned{display:flex;align-items:flex-start;justify-content:space-between;gap:14px;padding:10px 12px;background:#fbf8f3;border:1px solid #e9dfd2;border-radius:7px}
+.rf-linked-unplanned.is-excluded{opacity:.62}
+.rf-linked-unplanned-details{min-width:0;display:grid;gap:4px}
+.rf-linked-unplanned-details>div{display:flex;align-items:center;gap:9px;flex-wrap:wrap}
+.rf-linked-unplanned-details strong{font-size:13px;color:#302a23}
+.rf-linked-unplanned-details p{margin:0;font-size:12px;color:#5f574e;white-space:pre-wrap}
+.rf-linked-unplanned-details small{font-size:11px;color:#81766a}
+.rf-linked-unplanned-label,.report-unplanned-child-label{font-size:10px;font-weight:750;text-transform:uppercase;letter-spacing:.04em;color:#a65a17}
+.rf-linked-unplanned-details time,.report-unplanned-children time{font-size:11px;color:#81766a}
+.rf-linked-unplanned .rf-report-unplanned-toggle{white-space:nowrap;font-size:11px}
+.report-unplanned-children{margin:2px 0 10px 24px;padding-left:13px;border-left:2px solid #e7c99f;display:grid;gap:6px}
+.report-unplanned-children article{padding:7px 10px;background:#fbf8f3;border-radius:6px}
+.report-unplanned-children article>div{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.report-unplanned-children strong{font-size:12px;color:#302a23}
+.report-unplanned-children p{margin:4px 0 2px;font-size:11px;color:#5f574e;white-space:pre-wrap}
+.report-unplanned-children small{font-size:10px;color:#81766a}
+@media(max-width:650px){.rf-linked-unplanned{flex-direction:column}.rf-linked-unplanned-list{margin-left:8px}}
