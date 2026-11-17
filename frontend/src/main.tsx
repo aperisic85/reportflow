@@ -173,13 +173,24 @@ function App(){
       planReference={kind==='report'?planRefs.find(r=>r.activity_id===a.id)?.planned:undefined}
       initial={dataByActivity[a.id]} disabled={!canEdit||docStatus==='submitted'||(user.role==='employee'&&a.created_by!==user.id)}
       onSave={(c,p,i)=>notify(()=>saveUpdate(a.id,c,p,i))} busy={loading} number={number}/></div>)}</div>}
-    {kind==='report'&&unplannedItems.length>0&&<section className="rf-report-unplanned-select">
-     <div className="rf-report-unplanned-head"><div><h3>Neplanirani poslovi</h3><p>Automatski su preuzeti iz evidencije za ovaj mjesec. Odaberi što ulazi u izvješće.</p></div><strong>{includedUnplannedItems.length} od {unplannedItems.length} uključeno</strong></div>
-     {unplannedItems.map(item=><article key={item.id} className={item.include_in_document===false?'is-excluded':''}>
-      <div className="rf-report-unplanned-details"><time dateTime={item.performed_on}>{new Date(item.performed_on+'T12:00:00').toLocaleDateString('hr-HR',{dateStyle:'medium'})}</time><strong>{item.title}</strong><p>{item.description}</p>{item.related_activity_title&&<small>Povezano s aktivnošću: {item.related_activity_title}</small>}<small>Evidentirao/la: {item.created_by_name??'Nepoznat autor'}</small></div>
-      <label className="rf-report-unplanned-toggle"><input type="checkbox" checked={item.include_in_document!==false} disabled={!canSubmit||docStatus==='submitted'||loading} onChange={e=>notify(()=>setUnplannedInclusion(item.id,e.target.checked))}/> Uključi u izvješće</label>
-     </article>)}
-     {!canSubmit&&<p className="rf-report-unplanned-note">Odabir stavki za izvješće može mijenjati voditelj odjela.</p>}
+    {kind==='report'&&<section className="rf-report-unplanned-select">
+     <div className="rf-report-unplanned-head">
+      <div><h3>Neplanirani poslovi</h3><p>Poslovi evidentirani za odabrani mjesec. Odaberi što ulazi u mjesečno izvješće.</p></div>
+      <div className="rf-report-unplanned-controls">
+       <strong>{includedUnplannedItems.length} od {unplannedItems.length} uključeno</strong>
+       <button type="button" className="outline compact" disabled={loading} onClick={()=>{void refresh().catch(e=>setError(e.message));}}><RefreshCw size={14}/> Osvježi popis</button>
+      </div>
+     </div>
+     {unplannedItems.length===0?
+      <div className="rf-report-unplanned-empty">
+       <p>Za odabrani mjesec nema evidentiranih neplaniranih poslova.</p>
+       <button type="button" className="outline compact" onClick={()=>setTab('activities')}>Evidentiraj neplanirani posao</button>
+      </div>:
+      unplannedItems.map(item=><article key={item.id} className={item.include_in_document===false?'is-excluded':''}>
+       <div className="rf-report-unplanned-details"><time dateTime={item.performed_on}>{new Date(item.performed_on+'T12:00:00').toLocaleDateString('hr-HR',{dateStyle:'medium'})}</time><strong>{item.title}</strong><p>{item.description}</p>{item.related_activity_title&&<small>Povezano s aktivnošću: {item.related_activity_title}</small>}<small>Evidentirao/la: {item.created_by_name??'Nepoznat autor'}</small></div>
+       <label className="rf-report-unplanned-toggle"><input type="checkbox" checked={item.include_in_document!==false} disabled={!canSubmit||docStatus==='submitted'||loading} onChange={e=>notify(()=>setUnplannedInclusion(item.id,e.target.checked))}/> Uključi u izvješće</label>
+      </article>)}
+     {!canSubmit&&unplannedItems.length>0&&<p className="rf-report-unplanned-note">Odabir stavki za izvješće može mijenjati voditelj odjela.</p>}
     </section>}
    </section>}
    {tab==='activities'&&<><UnplannedActivityLog departmentId={dept} activities={activities} canWrite={canEdit} currentUserId={user.id} canManage={canSubmit} onSaved={refresh}/><section className="panel ux-panel">
