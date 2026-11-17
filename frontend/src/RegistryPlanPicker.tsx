@@ -19,7 +19,8 @@ export default function RegistryPlanPicker({activities,plannedIds,disabled,onAdd
   const normalized=query.trim().toLocaleLowerCase('hr');if(normalized.length<2)return [];
   const ordered=treeOrder(activities);
   const matches=ordered.filter(item=>(item.title+' '+item.description).toLocaleLowerCase('hr').includes(normalized));
-  const shown=matches.slice(0,limit);const matchedIds=new Set(matches.map(item=>item.id));
+  const available=matches.filter(item=>!planned.has(item.id));
+  const shown=available.slice(0,limit);const matchedIds=new Set(shown.map(item=>item.id));
   const displayIds=new Set(shown.map(item=>item.id));const byId=new Map(activities.map(item=>[item.id,item]));
   for(const item of shown){let parent=item.parent_id,remaining=activities.length;while(parent&&remaining-->0){displayIds.add(parent);parent=byId.get(parent)?.parent_id??null;}}
   const depthOf=(item:Activity)=>{let depth=0,parent=item.parent_id,remaining=activities.length;while(parent&&remaining-->0){depth++;parent=byId.get(parent)?.parent_id??null;}return Math.min(depth,5);};
@@ -41,7 +42,7 @@ export default function RegistryPlanPicker({activities,plannedIds,disabled,onAdd
      {normalized.length<2?<p className="rf-picker-hint">Registar se ne prikazuje cijeli. Upiši barem dva znaka za pretraživanje.</p>:rows.length===0?<p className="rf-picker-hint">{totalMatches>0&&availableMatches===0?'Sve pronađene aktivnosti već su u planu.':'Nema aktivnosti koje odgovaraju pretrazi.'}</p>:
       <>{rows.map(({item,depth,matched,alreadyPlanned})=><label key={item.id} className={'rf-picker-row'+(!matched?' is-context':'')+(alreadyPlanned?' is-planned':'')} style={{paddingLeft:12+depth*18}}>
        {matched&&!alreadyPlanned?<input type="checkbox" checked={selected.includes(item.id)} disabled={busy} onChange={e=>setSelected(ids=>e.target.checked?[...ids,item.id]:ids.filter(id=>id!==item.id))}/>:<span className="rf-picker-checkbox-placeholder"/>}
-       <span className="rf-picker-row-text"><strong>{item.title}</strong>{item.description&&<small>{item.description}</small>}</span>{alreadyPlanned&&<em>Već u planu</em>}{!matched&&<em>Nadređena aktivnost</em>}
+       <span className="rf-picker-row-text"><strong>{item.title}</strong>{item.description&&<small>{item.description}</small>}</span>{alreadyPlanned&&matched&&<em>Već u planu</em>}{!matched&&<em>Nadređena aktivnost</em>}
       </label>)}
       {availableMatches>limit&&<button type="button" className="outline rf-picker-more" onClick={()=>setLimit(n=>n+30)}>Prikaži još rezultata ({availableMatches-limit} preostalih)</button>}</>}
     </div>

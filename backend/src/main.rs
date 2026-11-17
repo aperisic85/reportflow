@@ -1094,7 +1094,7 @@ async fn health()->Json<Value> {Json(json!({"status":"ok"}))}
   .route("/api/threads/{id}/status",patch(thread_status))
   .route("/api/updates",get(updates).post(save_update))
   .route("/api/updates/add-from-registry",post(add_plan_from_registry))
-  .route("/api/updates/carry-forward",post(carry_forward)
+  .route("/api/updates/carry-forward",post(carry_forward))
   .route("/api/updates/carry-candidates",get(carry_candidates))
   .route("/api/plan-reference",get(plan_reference))
   .route("/api/activities/reorder",post(reorder_activities))
