@@ -112,7 +112,6 @@ function App(){
  // The preview must use the same defaults as the backend document generator.
  // A missing monthly record does not mean the registry activity is excluded.
  const includedActivities=activities.filter(a=>dataByActivity[a.id]?.include_in_document!==false);
- const includedUnplannedItems=unplannedItems.filter(item=>item.include_in_document!==false);
  const activityIds=new Set(activities.map(a=>a.id));
  const unplannedByActivity=new Map<string,UnplannedActivity[]>();
  for(const item of unplannedItems){if(item.related_activity_id&&activityIds.has(item.related_activity_id)){const rows=unplannedByActivity.get(item.related_activity_id)||[];rows.push(item);unplannedByActivity.set(item.related_activity_id,rows);}}
