@@ -757,3 +757,10 @@ button:focus-visible,summary:focus-visible{outline:3px solid #e58d1a;outline-off
 .rf-picker-footer>span{margin-right:auto;font-size:12px;color:#66594b;font-weight:650}
 .rf-picker-error{font-size:12px;color:#a33324;margin:10px 0 0}
 @media(max-width:600px){.rf-picker-backdrop{padding:8px}.rf-picker-dialog{padding:14px;max-height:92vh}.rf-picker-footer{flex-wrap:wrap}.rf-picker-footer>span{width:100%}}
+
+
+/* Unplanned work visibility in monthly reports */
+.rf-report-unplanned-controls{display:flex;align-items:center;justify-content:flex-end;gap:10px;flex-wrap:wrap}
+.rf-report-unplanned-empty{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:14px;border:1px dashed #d8cfc2;border-radius:8px;background:#faf8f5}
+.rf-report-unplanned-empty p{margin:0;color:#6d6257;font-size:13px}
+@media(max-width:650px){.rf-report-unplanned-controls,.rf-report-unplanned-empty{align-items:flex-start;flex-direction:column}}

@@ -40,7 +40,14 @@ export default function UnplannedActivityLog({departmentId,activities,canWrite,c
    const payload={performed_on:performedOn,title:title.trim(),description:description.trim(),related_activity_id:relatedActivityId||null,...(!editingId?{department_id:departmentId}:{})};
    if(editingId)await patch('/unplanned-activities/'+editingId,payload);
    else await post('/unplanned-activities',payload);
-   setPeriod(monthOf(performedOn));reset();setNotice('Obavljeni posao je evidentiran.');await onSaved?.();
+   const savedPeriod=monthOf(performedOn);
+   setPeriod(savedPeriod);
+   reset();
+   const [savedYear,savedMonth]=savedPeriod.split('-').map(Number);
+   const refreshedItems=await api<UnplannedActivity[]>('/unplanned-activities'+q({department_id:departmentId,year:savedYear,month:savedMonth}));
+   setItems(refreshedItems);
+   setNotice('Obavljeni posao je evidentiran.');
+   await onSaved?.();
   }catch(e){setError(e instanceof Error?e.message:String(e));}
   finally{setBusy(false);}
  };
