@@ -785,3 +785,13 @@ button:focus-visible,summary:focus-visible{outline:3px solid #e58d1a;outline-off
 .report-unplanned-children p{margin:4px 0 2px;font-size:11px;color:#5f574e;white-space:pre-wrap}
 .report-unplanned-children small{font-size:10px;color:#81766a}
 @media(max-width:650px){.rf-linked-unplanned{flex-direction:column}.rf-linked-unplanned-list{margin-left:8px}}
+
+
+/* Progressive Web App installation control */
+.rf-pwa-install-wrap{position:relative;display:flex;align-items:center}
+.rf-pwa-install{white-space:nowrap}
+.rf-pwa-help{position:absolute;z-index:50;top:calc(100% + 10px);right:0;width:min(320px,calc(100vw - 32px));padding:16px 42px 14px 16px;background:#fff;border:1px solid #d6d6d2;border-radius:12px;box-shadow:0 12px 32px rgba(0,0,0,.16);color:#242424}
+.rf-pwa-help>strong{display:flex;align-items:center;gap:8px}
+.rf-pwa-help ol{margin:12px 0 0;padding-left:22px;line-height:1.55}
+.rf-pwa-help-close{position:absolute;right:10px;top:10px;border:0;background:transparent;color:#555;cursor:pointer;padding:4px}
+@media(max-width:700px){.rf-pwa-install{font-size:12px;padding:8px}.rf-pwa-install-wrap{margin-left:auto}.main>header{gap:8px;flex-wrap:wrap}}
