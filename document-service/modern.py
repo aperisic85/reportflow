@@ -160,7 +160,18 @@ def populate_modern(payload, memorandum=False, approval=None):
         if source_version is not None:
             p = paragraph(doc, f"Izvorna verzija odjela: v{source_version}", size=8.5, color=MUTED, after=7)
 
-        for item, number, depth in numbered_items(department.get("items", [])):
+        items = department.get("items", [])
+        item_ids = {str(item.get("id")) for item in items}
+        unplanned_by_activity = {}
+        standalone_unplanned = []
+        for entry in department.get("unplanned_items", []):
+            related_id = str(entry.get("related_activity_id") or "")
+            if related_id and related_id in item_ids:
+                unplanned_by_activity.setdefault(related_id, []).append(entry)
+            else:
+                standalone_unplanned.append(entry)
+
+        for item, number, depth in numbered_items(items):
             title = doc.add_paragraph()
             title.paragraph_format.left_indent = Cm(min(depth, 5) * 0.56)
             title.paragraph_format.space_before = Pt(10 if depth == 0 else 5)
@@ -183,15 +194,32 @@ def populate_modern(payload, memorandum=False, approval=None):
                           bold=True, color=AMBER, size=9.6)
                 write_run(p, content, size=9.6)
 
-        unplanned = department.get("unplanned_items", [])
-        if unplanned:
+            for entry in unplanned_by_activity.get(str(item.get("id")), []):
+                child = doc.add_paragraph()
+                child.paragraph_format.left_indent = Cm(min(depth + 1, 5) * 0.56 + .3)
+                child.paragraph_format.space_before = Pt(3)
+                child.paragraph_format.space_after = Pt(3)
+                child.paragraph_format.keep_with_next = True
+                write_run(child, "Neplanirani posao · " + str(entry.get("performed_on", "")) + "  ",
+                          bold=True, color=MUTED, size=8.5)
+                write_run(child, (entry.get("title") or "").strip(), bold=True, color=INK, size=9.3)
+                description = (entry.get("description") or "").strip()
+                if description:
+                    detail = paragraph(doc, description, size=8.8, after=2)
+                    detail.paragraph_format.left_indent = Cm(min(depth + 1, 5) * 0.56 + .45)
+                author = (entry.get("created_by_name") or "").strip()
+                if author:
+                    meta_para = paragraph(doc, "Evidentirao/la: " + author, size=7.8, color=MUTED, after=4)
+                    meta_para.paragraph_format.left_indent = Cm(min(depth + 1, 5) * 0.56 + .45)
+
+        if standalone_unplanned:
             heading = doc.add_paragraph()
             heading.paragraph_format.space_before = Pt(12)
             heading.paragraph_format.space_after = Pt(7)
             heading.paragraph_format.keep_with_next = True
-            write_run(heading, "NEPLANIRANE AKTIVNOSTI", bold=True, color=AMBER, size=10)
+            write_run(heading, "NEPLANIRANI POSLOVI", bold=True, color=AMBER, size=10)
             line(heading, color="E6DFD6", size=5)
-            for entry in unplanned:
+            for entry in standalone_unplanned:
                 p = doc.add_paragraph()
                 p.paragraph_format.space_before = Pt(5)
                 p.paragraph_format.space_after = Pt(3)
