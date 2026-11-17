@@ -3,6 +3,7 @@ import {createRoot} from 'react-dom/client';
 import {BookOpen,CalendarDays,ClipboardCheck,FileDown,FileText,FolderKanban,LogOut,Plus,RefreshCw,Shield,Bell,MessageCircle,ArrowUp,ArrowDown,Save,PenLine,ChevronDown,ChevronRight} from 'lucide-react';
 import {api,post,patch,q,download,downloadArchived,type User,type Dept,type Activity,type Update,type SectorDoc,type SectorSnapshot,type PlanReference,type UnplannedActivity} from './api';
 import './style.css';
+import PwaInstallButton from './PwaInstallButton';
 import HistorySearch from './HistorySearch';
 import Dashboard from './Dashboard';
 import VerificationPage from './VerificationPage';
@@ -145,7 +146,7 @@ function App(){
    </button></div>
    <div className="sidebar-bottom"><div className="avatar">{user.name.slice(0,1).toUpperCase()}</div><div className="identity"><strong>{user.name}</strong><small>{user.role}</small></div><button title="Odjava" className="icon-button" onClick={()=>{sessionStorage.removeItem('rf_token');setToken(null);setUser(null);}}><LogOut size={18}/></button></div>
   </aside>
-  <main className="main"><header><div><h1>{({home:'Početni pregled',entries:'Izrada mjesečnog plana/izvješća',activities:'Unos aktivnosti',history:'Povijest/Pretraživanje',inbox:'Inbox / Obavijesti',department:'Izvješće/Plan odjela',sector:'Objedinjavanje za Upravu'} as Record<string,string>)[tab]}</h1></div><button className="outline" onClick={()=>notify(refresh)}><RefreshCw size={16}/> Osvježi</button></header>
+  <main className="main"><header><div><h1>{({home:'Početni pregled',entries:'Izrada mjesečnog plana/izvješća',activities:'Unos aktivnosti',history:'Povijest/Pretraživanje',inbox:'Inbox / Obavijesti',department:'Izvješće/Plan odjela',sector:'Objedinjavanje za Upravu'} as Record<string,string>)[tab]}</h1></div><PwaInstallButton/><button className="outline" onClick={()=>notify(refresh)}><RefreshCw size={16}/> Osvježi</button></header>
    {error&&<div className="alert danger" role="alert">{error}<button onClick={()=>setError('')}>×</button></div>}{notice&&<div className="alert success" role="status">{notice}<button onClick={()=>setNotice('')}>×</button></div>}
    {tab==='activities'&&isDirector&&<div className="filters rf-activity-department"><label>Odjel<select value={dept} onChange={e=>setDept(e.target.value)}>{depts.map(d=><option key={d.id} value={d.id}>{d.name}</option>)}</select></label></div>}
    {!['home','activities','inbox','history'].includes(tab)&&<div className="filters"><label>Odjel<select value={dept} onChange={e=>setDept(e.target.value)} disabled={user.role==='employee'||user.role==='manager'}>{depts.filter(d=>isDirector||d.id===user.department_id).map(d=><option value={d.id} key={d.id}>{d.name}</option>)}</select></label><label>Mjesec<select value={month} onChange={e=>setMonth(Number(e.target.value))}>{Array.from({length:12},(_,i)=><option key={i} value={i+1}>{new Date(2026,i,1).toLocaleString('hr-HR',{month:'long'})}</option>)}</select></label><label>Godina<input type="number" min="2000" max="2100" value={year} onChange={e=>setYear(Number(e.target.value))}/></label>{tab!=='entries'&&<label>Dokument<select value={kind} onChange={e=>setKind(e.target.value)}>{kinds.map(k=><option key={k.value} value={k.value}>{k.label}</option>)}</select></label>}</div>}
