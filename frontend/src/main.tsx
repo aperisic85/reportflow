@@ -9,6 +9,7 @@ import VerificationPage from './VerificationPage';
 import OrganizationAdmin from './OrganizationAdmin';
 import ActivityConversation from './ActivityConversation';
 import CarryPlanner from './CarryPlanner';
+import RegistryPlanPicker from './RegistryPlanPicker';
 import ActivityDetailsEditor from './ActivityDetailsEditor';
 import Inbox from './Inbox';
 import {DepartmentReportPreview,SectorReportPreview,type DepartmentVersion} from './ReportPreview';
@@ -92,7 +93,7 @@ function App(){
  const visibleEntries=treeOrder(activities).filter(a=>{
   const matchesText=!normalizedEntrySearch||(a.title+' '+a.description).toLocaleLowerCase('hr').includes(normalizedEntrySearch);
   const existing=Boolean(dataByActivity[a.id]);
-  return matchesText&&(entryFilter==='all'||(entryFilter==='saved'?existing:!existing));
+  return matchesText&&(kind==='plan'?existing:(entryFilter==='all'||(entryFilter==='saved'?existing:!existing)));
  });
  const normalizedRegistrySearch=registrySearch.trim().toLocaleLowerCase('hr');
  const registryById=new Map<string,Activity>(activities.map(a=>[a.id,a] as const));
@@ -153,16 +154,19 @@ function App(){
      <button type="button" className={kind==='report'?'active':''} aria-pressed={kind==='report'} onClick={()=>setKind('report')}>Izvješće</button>
     </div>
     <p className="simple-guidance">{kind==='plan'?'Upiši što planiraš napraviti u ovom mjesecu.':'Upiši što je stvarno napravljeno u ovom mjesecu i označi status.'}</p>
-    <p className="simple-counter">{updates.length} od {activities.length} aktivnosti ima mjesečni zapis.</p>
+    <p className="simple-counter">{kind==='plan'?updates.length+' aktivnosti odabrano je u plan za ovaj mjesec.':updates.length+' od '+activities.length+' aktivnosti ima mjesečni zapis.'}</p>
     <div className="ux-toolbar">
-     <label>Pronađi aktivnost<input value={entrySearch} onChange={e=>setEntrySearch(e.target.value)} placeholder="Pretraži naziv ili opis aktivnosti"/></label>
-     <label>Prikaži<select value={entryFilter} onChange={e=>setEntryFilter(e.target.value)}>
+     <label>Pronađi aktivnost<input value={entrySearch} onChange={e=>setEntrySearch(e.target.value)} placeholder={kind==='plan'?'Pretraži odabrane aktivnosti u planu':'Pretraži naziv ili opis aktivnosti'}/></label>
+     {kind==='report'&&<label>Prikaži<select value={entryFilter} onChange={e=>setEntryFilter(e.target.value)}>
       <option value="all">Sve aktivnosti</option><option value="missing">Bez mjesečnog unosa</option><option value="saved">Sa spremljenim unosom</option>
-     </select></label>
+     </select></label>}
     </div>
-    {kind==='plan'&&<CarryPlanner departmentId={dept} year={year} month={month} canCarry={canSubmit&&docStatus!=='submitted'} onApplied={refresh}/>}
+    {kind==='plan'&&<div className="rf-plan-actions">
+     <RegistryPlanPicker activities={activities} plannedIds={updates.map(u=>u.activity_id)} disabled={!canSubmit||docStatus==='submitted'||loading} onAdd={async ids=>{setLoading(true);try{const result=await post<{created:number}>('/updates/add-from-registry',{department_id:dept,year,month,activity_ids:ids});await refresh();return result.created;}finally{setLoading(false);}}}/>
+     <CarryPlanner departmentId={dept} year={year} month={month} canCarry={canSubmit&&docStatus!=='submitted'} onApplied={refresh}/>
+    </div>}
     {activities.length===0?<Empty text="Nema aktivnosti. Prvo dodaj aktivnost u Unosu aktivnosti."/>:
-     visibleEntries.length===0?<Empty text="Nema aktivnosti koje odgovaraju filtrima."/>:
+     visibleEntries.length===0?<Empty text={kind==='plan'?(updates.length===0?'Plan je zasad prazan. Dodaj aktivnosti iz registra ili prenesi nedovršene iz prethodnog izvješća.':'Nema planiranih aktivnosti koje odgovaraju pretrazi.'):'Nema aktivnosti koje odgovaraju filtrima.'}/> :
      <div className="ux-entry-list">{numberedActivities(visibleEntries).map(({item:a,number,depth})=><div className={'activity-hierarchy-row'+(depth?' is-child':'')} key={a.id} style={{marginLeft:Math.min(depth,5)*20}}><MonthlyEntry
       key={`${a.id}-${year}-${month}-${kind}`}
       item={a} kind={kind as 'plan'|'report'}
