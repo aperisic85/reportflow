@@ -91,7 +91,8 @@ function App(){
  const dataByActivity=Object.fromEntries(updates.map(u=>[u.activity_id,u]));
  const normalizedEntrySearch=entrySearch.trim().toLocaleLowerCase('hr');
  const visibleEntries=treeOrder(activities).filter(a=>{
-  const matchesText=!normalizedEntrySearch||(a.title+' '+a.description).toLocaleLowerCase('hr').includes(normalizedEntrySearch);
+  const linkedSearchText=unplannedItems.filter(item=>item.related_activity_id===a.id).map(item=>item.title+' '+item.description).join(' ');
+  const matchesText=!normalizedEntrySearch||(a.title+' '+a.description+' '+linkedSearchText).toLocaleLowerCase('hr').includes(normalizedEntrySearch);
   const existing=Boolean(dataByActivity[a.id]);
   return matchesText&&(kind==='plan'?existing:(entryFilter==='all'||(entryFilter==='saved'?existing:!existing)));
  });
@@ -112,6 +113,10 @@ function App(){
  // A missing monthly record does not mean the registry activity is excluded.
  const includedActivities=activities.filter(a=>dataByActivity[a.id]?.include_in_document!==false);
  const includedUnplannedItems=unplannedItems.filter(item=>item.include_in_document!==false);
+ const activityIds=new Set(activities.map(a=>a.id));
+ const unplannedByActivity=new Map<string,UnplannedActivity[]>();
+ for(const item of unplannedItems){if(item.related_activity_id&&activityIds.has(item.related_activity_id)){const rows=unplannedByActivity.get(item.related_activity_id)||[];rows.push(item);unplannedByActivity.set(item.related_activity_id,rows);}}
+ const standaloneUnplannedItems=unplannedItems.filter(item=>!item.related_activity_id||!activityIds.has(item.related_activity_id));
  const previewContent=(a:Activity)=>{const description=a.description.trim();const monthly=dataByActivity[a.id]?.content?.trim()||'';return {description,monthly:monthly!==description?monthly:''};};
  async function saveActivity(){await post('/activities',{department_id:dept,parent_id:newParent||null,title:newTitle,description:newDescription,type:newType});setNewTitle('');setNewDescription('');setNewParent('');setShowNewActivity(false);await refresh();}
  async function saveUpdate(activityId:string,content:string,progress:string,include:boolean){await post('/updates',{activity_id:activityId,year,month,kind,content,progress,include_in_document:include});await refresh();}
@@ -172,25 +177,32 @@ function App(){
       item={a} kind={kind as 'plan'|'report'}
       planReference={kind==='report'?planRefs.find(r=>r.activity_id===a.id)?.planned:undefined}
       initial={dataByActivity[a.id]} disabled={!canEdit||docStatus==='submitted'||(user.role==='employee'&&a.created_by!==user.id)}
-      onSave={(c,p,i)=>notify(()=>saveUpdate(a.id,c,p,i))} busy={loading} number={number}/></div>)}</div>}
-    {kind==='report'&&<section className="rf-report-unplanned-select">
+      onSave={(c,p,i)=>notify(()=>saveUpdate(a.id,c,p,i))} busy={loading} number={number}/>
+      {kind==='report'&&(unplannedByActivity.get(a.id)?.length??0)>0&&<div className="rf-linked-unplanned-list">
+       {unplannedByActivity.get(a.id)!.map(item=><article key={item.id} className={'rf-linked-unplanned'+(item.include_in_document===false?' is-excluded':'')}>
+        <div className="rf-linked-unplanned-details"><div><span className="rf-linked-unplanned-label">Neplanirani posao</span><time dateTime={item.performed_on}>{new Date(item.performed_on+'T12:00:00').toLocaleDateString('hr-HR',{dateStyle:'medium'})}</time></div><strong>{item.title}</strong><p>{item.description}</p>{item.created_by_name&&<small>Evidentirao/la: {item.created_by_name}</small>}</div>
+        <label className="rf-report-unplanned-toggle"><input type="checkbox" checked={item.include_in_document!==false} disabled={!canSubmit||docStatus==='submitted'||loading} onChange={e=>notify(()=>setUnplannedInclusion(item.id,e.target.checked))}/> Uključi u izvješće</label>
+       </article>)}
+      </div>}
+     </div>)}</div>}
+    {kind==='report'&&unplannedItems.length===0&&<section className="rf-report-unplanned-select">
+     <div className="rf-report-unplanned-head"><div><h3>Neplanirani poslovi</h3><p>Za odabrani mjesec nema evidentiranih neplaniranih poslova.</p></div>
+      <button type="button" className="outline compact" onClick={()=>setTab('activities')}>Evidentiraj neplanirani posao</button>
+     </div>
+    </section>}
+    {kind==='report'&&standaloneUnplannedItems.length>0&&<section className="rf-report-unplanned-select">
      <div className="rf-report-unplanned-head">
       <div><h3>Neplanirani poslovi</h3><p>Poslovi evidentirani za odabrani mjesec. Odaberi što ulazi u mjesečno izvješće.</p></div>
       <div className="rf-report-unplanned-controls">
-       <strong>{includedUnplannedItems.length} od {unplannedItems.length} uključeno</strong>
+       <strong>{standaloneUnplannedItems.filter(item=>item.include_in_document!==false).length} od {standaloneUnplannedItems.length} uključeno</strong>
        <button type="button" className="outline compact" disabled={loading} onClick={()=>{void refresh().catch(e=>setError(e.message));}}><RefreshCw size={14}/> Osvježi popis</button>
       </div>
      </div>
-     {unplannedItems.length===0?
-      <div className="rf-report-unplanned-empty">
-       <p>Za odabrani mjesec nema evidentiranih neplaniranih poslova.</p>
-       <button type="button" className="outline compact" onClick={()=>setTab('activities')}>Evidentiraj neplanirani posao</button>
-      </div>:
-      unplannedItems.map(item=><article key={item.id} className={item.include_in_document===false?'is-excluded':''}>
+      {standaloneUnplannedItems.map(item=><article key={item.id} className={item.include_in_document===false?'is-excluded':''}>
        <div className="rf-report-unplanned-details"><time dateTime={item.performed_on}>{new Date(item.performed_on+'T12:00:00').toLocaleDateString('hr-HR',{dateStyle:'medium'})}</time><strong>{item.title}</strong><p>{item.description}</p>{item.related_activity_title&&<small>Povezano s aktivnošću: {item.related_activity_title}</small>}<small>Evidentirao/la: {item.created_by_name??'Nepoznat autor'}</small></div>
        <label className="rf-report-unplanned-toggle"><input type="checkbox" checked={item.include_in_document!==false} disabled={!canSubmit||docStatus==='submitted'||loading} onChange={e=>notify(()=>setUnplannedInclusion(item.id,e.target.checked))}/> Uključi u izvješće</label>
       </article>)}
-     {!canSubmit&&unplannedItems.length>0&&<p className="rf-report-unplanned-note">Odabir stavki za izvješće može mijenjati voditelj odjela.</p>}
+     {!canSubmit&&standaloneUnplannedItems.length>0&&<p className="rf-report-unplanned-note">Odabir stavki za izvješće može mijenjati voditelj odjela.</p>}
     </section>}
    </section>}
    {tab==='activities'&&<><UnplannedActivityLog departmentId={dept} activities={activities} canWrite={canEdit} currentUserId={user.id} canManage={canSubmit} onSaved={refresh}/><section className="panel ux-panel">
