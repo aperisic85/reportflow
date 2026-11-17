@@ -37,7 +37,7 @@ export default function RegistryPlanPicker({activities,plannedIds,disabled,onAdd
   {open&&<div className="rf-picker-backdrop" role="presentation">
    <section className="rf-picker-dialog" role="dialog" aria-modal="true" aria-labelledby="rf-picker-title">
     <header className="rf-picker-header"><div><h3 id="rf-picker-title">Dodaj aktivnosti iz registra</h3><p>Odaberi samo aktivnosti koje želiš uvrstiti u mjesečni plan.</p></div><button type="button" className="icon-button" aria-label="Zatvori" onClick={()=>setOpen(false)}><X size={19}/></button></header>
-    <label className="rf-picker-search"><Search size={17}/><input autoFocus value={query} onChange={e=>{setQuery(e.target.value);setLimit(30);setSelected([]);}} placeholder="Upiši naziv ili dio opisa aktivnosti (najmanje 2 znaka)"/></label>
+    <label className="rf-picker-search"><Search size={17}/><input autoFocus value={query} onChange={e=>{setQuery(e.target.value);setLimit(30);}} placeholder="Upiši naziv ili dio opisa aktivnosti (najmanje 2 znaka)"/></label>
     <div className="rf-picker-results">
      {normalized.length<2?<p className="rf-picker-hint">Registar se ne prikazuje cijeli. Upiši barem dva znaka za pretraživanje.</p>:rows.length===0?<p className="rf-picker-hint">{totalMatches>0&&availableMatches===0?'Sve pronađene aktivnosti već su u planu.':'Nema aktivnosti koje odgovaraju pretrazi.'}</p>:
       <>{rows.map(({item,depth,matched,alreadyPlanned})=><label key={item.id} className={'rf-picker-row'+(!matched?' is-context':'')+(alreadyPlanned?' is-planned':'')} style={{paddingLeft:12+depth*18}}>
