@@ -515,7 +515,7 @@ async fn add_plan_from_registry(State(s):State<App>,h:HeaderMap,Json(p):Json<Add
  let status:Option<String>=sqlx::query_scalar("SELECT status FROM department_documents WHERE department_id=$1 AND year=$2 AND month=$3 AND kind='plan'")
   .bind(p.department_id).bind(p.year).bind(p.month).fetch_optional(&s.db).await.map_err(db)?;
  if status.as_deref()==Some("submitted"){return Err(bad("Predani plan prvo vratite u nacrt"));}
- let rows=sqlx::query("SELECT id FROM activities WHERE department_id=$1 AND id=ANY($2)")
+ let rows=sqlx::query("SELECT id FROM activities WHERE department_id=$1 AND id=ANY($2) AND status NOT IN ('completed','cancelled')")
   .bind(p.department_id).bind(&p.activity_ids).fetch_all(&s.db).await.map_err(db)?;
  let available:HashSet<Uuid>=rows.iter().map(|r|r.get::<Uuid,_>("id")).collect();
  if available!=wanted{return Err(bad("Jedna ili više odabranih aktivnosti ne pripada ovom odjelu"));}

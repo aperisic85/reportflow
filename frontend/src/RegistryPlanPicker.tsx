@@ -18,7 +18,7 @@ export default function RegistryPlanPicker({activities,plannedIds,disabled,onAdd
  const rows=useMemo<Row[]>(()=>{
   const normalized=query.trim().toLocaleLowerCase('hr');if(normalized.length<2)return [];
   const ordered=treeOrder(activities);
-  const matches=ordered.filter(item=>(item.title+' '+item.description).toLocaleLowerCase('hr').includes(normalized));
+  const matches=ordered.filter(item=>!['completed','cancelled'].includes(item.status)&&(item.title+' '+item.description).toLocaleLowerCase('hr').includes(normalized));
   const available=matches.filter(item=>!planned.has(item.id));
   const shown=available.slice(0,limit);const matchedIds=new Set(shown.map(item=>item.id));
   const displayIds=new Set(shown.map(item=>item.id));const byId=new Map(activities.map(item=>[item.id,item]));
@@ -27,8 +27,8 @@ export default function RegistryPlanPicker({activities,plannedIds,disabled,onAdd
   return ordered.filter(item=>displayIds.has(item.id)).map(item=>({item,depth:depthOf(item),matched:matchedIds.has(item.id),alreadyPlanned:planned.has(item.id)}));
  },[activities,plannedIds,query,limit]);
  const normalized=query.trim().toLocaleLowerCase('hr');
- const totalMatches=normalized.length>=2?activities.filter(item=>(item.title+' '+item.description).toLocaleLowerCase('hr').includes(normalized)).length:0;
- const availableMatches=normalized.length>=2?activities.filter(item=>!planned.has(item.id)&&(item.title+' '+item.description).toLocaleLowerCase('hr').includes(normalized)).length:0;
+ const totalMatches=normalized.length>=2?activities.filter(item=>!['completed','cancelled'].includes(item.status)&&(item.title+' '+item.description).toLocaleLowerCase('hr').includes(normalized)).length:0;
+ const availableMatches=normalized.length>=2?activities.filter(item=>!['completed','cancelled'].includes(item.status)&&!planned.has(item.id)&&(item.title+' '+item.description).toLocaleLowerCase('hr').includes(normalized)).length:0;
  const openPicker=()=>{setQuery('');setSelected([]);setLimit(30);setError('');setNotice('');setOpen(true);};
  const add=async()=>{if(!selected.length)return;setBusy(true);setError('');try{const created=await onAdd(selected);setNotice('Dodano '+created+' aktivnosti u plan.');setOpen(false);setSelected([]);setQuery('');}catch(e){setError(e instanceof Error?e.message:String(e));}finally{setBusy(false);}};
  return <div className="rf-plan-picker">
