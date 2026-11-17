@@ -13,7 +13,7 @@ export default function PwaInstallButton(){
  const isIos=/iphone|ipad|ipod/i.test(navigator.userAgent);
  useEffect(()=>{
   if('serviceWorker' in navigator){
-   window.addEventListener('load',()=>{void navigator.serviceWorker.register('/sw.js',{scope:'/'}).catch(error=>console.warn('ReportFlow service worker registration failed',error));},{once:true});
+   void navigator.serviceWorker.register('/sw.js',{scope:'/'}).catch(error=>console.warn('ReportFlow service worker registration failed',error));
   }
   const standalone=window.matchMedia('(display-mode: standalone)').matches||Boolean((navigator as Navigator&{standalone?:boolean}).standalone);
   setInstalled(standalone);
