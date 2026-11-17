@@ -47,6 +47,15 @@ def populate(payload: RenderRequest) -> bytes:
         h.paragraph_format.keep_with_next = True
         h.add_run(f'{section_num}.  {section_data.get("name", "ODJEL").upper()}').bold = True
         items = section_data.get('items', [])
+        item_ids = {str(item.get('id')) for item in items}
+        unplanned_by_activity = {}
+        standalone_unplanned = []
+        for entry in section_data.get('unplanned_items', []):
+            related_id = str(entry.get('related_activity_id') or '')
+            if related_id and related_id in item_ids:
+                unplanned_by_activity.setdefault(related_id, []).append(entry)
+            else:
+                standalone_unplanned.append(entry)
         for item, number, depth in numbered_items(items):
             para = doc.add_paragraph()
             para.paragraph_format.left_indent = Cm(min(depth, 5) * 0.45)
@@ -65,13 +74,31 @@ def populate(payload: RenderRequest) -> bytes:
                 para.add_run(label).bold = True
                 para.add_run(content)
 
-        unplanned = section_data.get('unplanned_items', [])
-        if unplanned:
+            for entry in unplanned_by_activity.get(str(item.get('id')), []):
+                child = doc.add_paragraph()
+                child.paragraph_format.left_indent = Cm(min(depth + 1, 5) * 0.45 + 0.15)
+                child.paragraph_format.space_before = Pt(3)
+                child.paragraph_format.space_after = Pt(2)
+                child.paragraph_format.keep_with_next = True
+                child.add_run('Neplanirani posao · ' + str(entry.get('performed_on', '')) + '  ').italic = True
+                child.add_run(str(entry.get('title', '')).strip()).bold = True
+                description = (entry.get('description') or '').strip()
+                if description:
+                    detail = doc.add_paragraph(description)
+                    detail.paragraph_format.left_indent = Cm(min(depth + 1, 5) * 0.45 + 0.35)
+                    detail.paragraph_format.space_after = Pt(2)
+                author = (entry.get('created_by_name') or '').strip()
+                if author:
+                    meta = doc.add_paragraph('Evidentirao/la: ' + author)
+                    meta.paragraph_format.left_indent = Cm(min(depth + 1, 5) * 0.45 + 0.35)
+                    meta.paragraph_format.space_after = Pt(4)
+
+        if standalone_unplanned:
             heading = doc.add_paragraph()
             heading.paragraph_format.space_before = Pt(10)
             heading.paragraph_format.keep_with_next = True
-            heading.add_run('Neplanirane aktivnosti').bold = True
-            for entry in unplanned:
+            heading.add_run('Neplanirani poslovi').bold = True
+            for entry in standalone_unplanned:
                 p = doc.add_paragraph()
                 p.paragraph_format.left_indent = Cm(0.15)
                 p.paragraph_format.space_after = Pt(2)
