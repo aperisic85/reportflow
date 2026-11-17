@@ -1,0 +1,16 @@
+{
+ "id":"/",
+ "name":"ReportFlow – Sektor sigurnosti plovidbe",
+ "short_name":"ReportFlow",
+ "description":"Mjesečni planovi i izvješća Sektora sigurnosti plovidbe",
+ "lang":"hr",
+ "start_url":"/",
+ "scope":"/",
+ "display":"standalone",
+ "orientation":"any",
+ "background_color":"#f4f4f2",
+ "theme_color":"#242424",
+ "icons":[
+  {"src":"/icons/reportflow.svg","sizes":"any","type":"image/svg+xml","purpose":"any maskable"}
+ ]
+}
