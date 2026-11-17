@@ -504,6 +504,31 @@ async fn save_update(State(s):State<App>,h:HeaderMap,Json(p):Json<SaveUpdate>)->
  audit(&s,&c,"update.save",Some(id)).await; Ok(Json(json!({"id":id})))
 }
 
+#[derive(Deserialize)] struct AddPlanFromRegistry {department_id:Uuid,year:i32,month:i32,activity_ids:Vec<Uuid>}
+async fn add_plan_from_registry(State(s):State<App>,h:HeaderMap,Json(p):Json<AddPlanFromRegistry>)->ResultApi<Json<Value>> {
+ let c=who(&s,&h).await?;
+ guard_dept(&s,&c,p.department_id,"manage").await?;
+ check_period(p.year,p.month,"plan")?;
+ if p.activity_ids.is_empty()||p.activity_ids.len()>500 {return Err(bad("Odaberite između 1 i 500 aktivnosti"));}
+ let wanted:HashSet<Uuid>=p.activity_ids.iter().copied().collect();
+ if wanted.len()!=p.activity_ids.len(){return Err(bad("Popis sadrži ponovljene aktivnosti"));}
+ let status:Option<String>=sqlx::query_scalar("SELECT status FROM department_documents WHERE department_id=$1 AND year=$2 AND month=$3 AND kind='plan'")
+  .bind(p.department_id).bind(p.year).bind(p.month).fetch_optional(&s.db).await.map_err(db)?;
+ if status.as_deref()==Some("submitted"){return Err(bad("Predani plan prvo vratite u nacrt"));}
+ let rows=sqlx::query("SELECT id FROM activities WHERE department_id=$1 AND id=ANY($2)")
+  .bind(p.department_id).bind(&p.activity_ids).fetch_all(&s.db).await.map_err(db)?;
+ let available:HashSet<Uuid>=rows.iter().map(|r|r.get::<Uuid,_>("id")).collect();
+ if available!=wanted{return Err(bad("Jedna ili više odabranih aktivnosti ne pripada ovom odjelu"));}
+ let mut tx=s.db.begin().await.map_err(db)?;
+ let mut created=0u64;
+ for id in &p.activity_ids {
+  created+=sqlx::query("INSERT INTO activity_updates(activity_id,year,month,kind,content,progress,include_in_document,updated_by,created_by) VALUES($1,$2,$3,'plan','','not_started',true,$4,$4) ON CONFLICT(activity_id,year,month,kind) DO NOTHING")
+   .bind(id).bind(p.year).bind(p.month).bind(c.sub).execute(&mut *tx).await.map_err(db)?.rows_affected();
+ }
+ tx.commit().await.map_err(db)?;
+ if created>0 {audit(&s,&c,"updates.add_from_registry",Some(p.department_id)).await;}
+ Ok(Json(json!({"created":created})))
+}
 // Carry an unfinished recurring activity into the next month without copying an old
 // accomplishment into the new month's actual results.
 
@@ -1068,7 +1093,8 @@ async fn health()->Json<Value> {Json(json!({"status":"ok"}))}
   .route("/api/threads/{id}/participants",post(thread_add_person))
   .route("/api/threads/{id}/status",patch(thread_status))
   .route("/api/updates",get(updates).post(save_update))
-  .route("/api/updates/carry-forward",post(carry_forward))
+  .route("/api/updates/add-from-registry",post(add_plan_from_registry))
+  .route("/api/updates/carry-forward",post(carry_forward)
   .route("/api/updates/carry-candidates",get(carry_candidates))
   .route("/api/plan-reference",get(plan_reference))
   .route("/api/activities/reorder",post(reorder_activities))
