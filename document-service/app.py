@@ -98,6 +98,26 @@ def populate(payload: RenderRequest, pdf_output: bool = False) -> bytes:
                 para.add_run(label).bold = True
                 para.add_run(content)
 
+            if not pdf_output:
+                for entry in unplanned_by_activity.get(str(item.get('id')), []):
+                    child = doc.add_paragraph()
+                    child.paragraph_format.left_indent = Cm(min(depth + 1, 5) * 0.45 + 0.15)
+                    child.paragraph_format.space_before = Pt(3)
+                    child.paragraph_format.space_after = Pt(2)
+                    child.paragraph_format.keep_with_next = True
+                    child.add_run('Neplanirani posao · ' + str(entry.get('performed_on', '')) + '  ').italic = True
+                    child.add_run(str(entry.get('title', '')).strip()).bold = True
+                    description = (entry.get('description') or '').strip()
+                    if description:
+                        detail = doc.add_paragraph(description)
+                        detail.paragraph_format.left_indent = Cm(min(depth + 1, 5) * 0.45 + 0.35)
+                        detail.paragraph_format.space_after = Pt(2)
+                    author = (entry.get('created_by_name') or '').strip()
+                    if author:
+                        meta = doc.add_paragraph('Evidentirao/la: ' + author)
+                        meta.paragraph_format.left_indent = Cm(min(depth + 1, 5) * 0.45 + 0.35)
+                        meta.paragraph_format.space_after = Pt(4)
+
         if standalone_unplanned:
             heading = doc.add_paragraph()
             heading.paragraph_format.space_before = Pt(10)
@@ -115,7 +135,14 @@ def populate(payload: RenderRequest, pdf_output: bool = False) -> bytes:
                     detail.paragraph_format.left_indent = Cm(0.45)
                     detail.paragraph_format.space_after = Pt(2)
                 related = (entry.get('related_activity_title') or '').strip()
-                meta = f'Povezano s aktivnošću: {related}' if related else ''
+                author = (entry.get('created_by_name') or '').strip()
+                if pdf_output:
+                    meta = f'Povezano s aktivnošću: {related}' if related else ''
+                else:
+                    meta = ' · '.join(x for x in [
+                        f'Povezano s aktivnošću: {related}' if related else '',
+                        f'Evidentirao/la: {author}' if author else ''
+                    ] if x)
                 if meta:
                     meta_para = doc.add_paragraph(meta)
                     meta_para.paragraph_format.left_indent = Cm(0.45)
