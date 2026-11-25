@@ -123,6 +123,30 @@ class NumberingTests(unittest.TestCase):
                 self.assertLess(joined.index("Glavna aktivnost tri"), joined.index("Izvanredna intervencija"))
                 self.assertLess(joined.index("Izvanredna intervencija"), joined.index("Prva podaktivnost"))
 
+    def test_pdf_exports_render_linked_unplanned_jobs_as_numbered_subitems_without_author(self):
+        data = fixture()
+        renderers = (
+            lambda payload: populate(payload, pdf_output=True),
+            populate_modern,
+        )
+        for render in renderers:
+            with self.subTest(renderer=getattr(render, "__name__", "ISO PDF")):
+                document = Document(io.BytesIO(render(data)))
+                joined = "\\n".join(p.text for p in document.paragraphs)
+                self.assertIn("3.1", joined)
+                self.assertIn("3.2", joined)
+                self.assertIn("3.3", joined)
+                self.assertLess(joined.index("Glavna aktivnost tri"), joined.index("Izvanredna intervencija"))
+                self.assertLess(joined.index("Izvanredna intervencija"), joined.index("Prva podaktivnost"))
+                self.assertLess(joined.index("Prva podaktivnost"), joined.index("Druga podaktivnost"))
+                self.assertNotIn("Evidentirao/la", joined)
+                self.assertNotIn("Radnik", joined)
+
+    def test_iso_docx_export_keeps_existing_unplanned_job_metadata(self):
+        document = Document(io.BytesIO(populate(fixture())))
+        joined = "\\n".join(p.text for p in document.paragraphs)
+        self.assertIn("Evidentirao/la: Radnik", joined)
+
     def test_unplanned_only_report_can_be_rendered(self):
         data = fixture()
         data.snapshot["sections"][0]["items"] = []
