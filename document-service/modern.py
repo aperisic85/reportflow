@@ -16,7 +16,7 @@ from docx.oxml import OxmlElement
 from docx.oxml.ns import qn
 from docx.shared import Cm, Pt, RGBColor
 
-from numbering import numbered_items
+from numbering import numbered_items_with_insertions
 
 INK = RGBColor(37, 35, 32)
 MUTED = RGBColor(112, 104, 94)
@@ -171,7 +171,26 @@ def populate_modern(payload, memorandum=False, approval=None):
             else:
                 standalone_unplanned.append(entry)
 
-        for item, number, depth in numbered_items(items):
+        for row_type, row_data, number, depth in numbered_items_with_insertions(items, unplanned_by_activity):
+            if row_type == "unplanned":
+                entry = row_data
+                child = doc.add_paragraph()
+                child.paragraph_format.left_indent = Cm(min(depth, 5) * 0.56)
+                child.paragraph_format.space_before = Pt(5)
+                child.paragraph_format.space_after = Pt(3)
+                child.paragraph_format.keep_with_next = True
+                write_run(child, f"{number}  ", bold=True, color=AMBER, size=10)
+                write_run(child, (entry.get("title") or "").strip(), bold=True, color=INK, size=10.5)
+                performed_on = str(entry.get("performed_on", "")).strip()
+                if performed_on:
+                    write_run(child, "  (" + performed_on + ")", color=MUTED, size=8.5)
+                description = (entry.get("description") or "").strip()
+                if description:
+                    detail = paragraph(doc, description, size=9.2, after=4)
+                    detail.paragraph_format.left_indent = Cm(min(depth, 5) * 0.56 + .15)
+                continue
+
+            item = row_data
             title = doc.add_paragraph()
             title.paragraph_format.left_indent = Cm(min(depth, 5) * 0.56)
             title.paragraph_format.space_before = Pt(10 if depth == 0 else 5)
@@ -194,24 +213,6 @@ def populate_modern(payload, memorandum=False, approval=None):
                           bold=True, color=AMBER, size=9.6)
                 write_run(p, content, size=9.6)
 
-            for entry in unplanned_by_activity.get(str(item.get("id")), []):
-                child = doc.add_paragraph()
-                child.paragraph_format.left_indent = Cm(min(depth + 1, 5) * 0.56 + .3)
-                child.paragraph_format.space_before = Pt(3)
-                child.paragraph_format.space_after = Pt(3)
-                child.paragraph_format.keep_with_next = True
-                write_run(child, "Neplanirani posao · " + str(entry.get("performed_on", "")) + "  ",
-                          bold=True, color=MUTED, size=8.5)
-                write_run(child, (entry.get("title") or "").strip(), bold=True, color=INK, size=9.3)
-                description = (entry.get("description") or "").strip()
-                if description:
-                    detail = paragraph(doc, description, size=8.8, after=2)
-                    detail.paragraph_format.left_indent = Cm(min(depth + 1, 5) * 0.56 + .45)
-                author = (entry.get("created_by_name") or "").strip()
-                if author:
-                    meta_para = paragraph(doc, "Evidentirao/la: " + author, size=7.8, color=MUTED, after=4)
-                    meta_para.paragraph_format.left_indent = Cm(min(depth + 1, 5) * 0.56 + .45)
-
         if standalone_unplanned:
             heading = doc.add_paragraph()
             heading.paragraph_format.space_before = Pt(12)
@@ -231,11 +232,7 @@ def populate_modern(payload, memorandum=False, approval=None):
                     detail = paragraph(doc, description, size=9.2, after=3)
                     detail.paragraph_format.left_indent = Cm(.15)
                 related = (entry.get("related_activity_title") or "").strip()
-                author = (entry.get("created_by_name") or "").strip()
-                meta = " · ".join(x for x in [
-                    f"Povezano s aktivnošću: {related}" if related else "",
-                    f"Evidentirao/la: {author}" if author else ""
-                ] if x)
+                meta = f"Povezano s aktivnošću: {related}" if related else ""
                 if meta:
                     meta_para = paragraph(doc, meta, size=8, color=MUTED, after=5)
                     meta_para.paragraph_format.left_indent = Cm(.15)
