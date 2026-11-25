@@ -7,7 +7,7 @@ from docx.shared import Cm, Pt
 from docx.enum.text import WD_ALIGN_PARAGRAPH
 from pathlib import Path
 import io, subprocess, tempfile
-from numbering import numbered_items
+from numbering import numbered_items, numbered_items_with_insertions
 from modern import populate_modern
 
 app = FastAPI(title='ReportFlow document renderer')
@@ -21,7 +21,7 @@ class RenderRequest(BaseModel):
     approval: dict | None = None
 
 
-def populate(payload: RenderRequest) -> bytes:
+def populate(payload: RenderRequest, pdf_output: bool = False) -> bytes:
     doc = Document(str(TEMPLATE)) if TEMPLATE.exists() else Document()
     # Remove any placeholder body paragraphs while preserving original section headers/footers.
     body = doc._element.body
@@ -56,14 +56,38 @@ def populate(payload: RenderRequest) -> bytes:
                 unplanned_by_activity.setdefault(related_id, []).append(entry)
             else:
                 standalone_unplanned.append(entry)
-        for item, number, depth in numbered_items(items):
+        if pdf_output:
+            rows = numbered_items_with_insertions(items, unplanned_by_activity)
+        else:
+            rows = [("activity", item, number, depth)
+                    for item, number, depth in numbered_items(items)]
+        for row_type, row_data, number, depth in rows:
+            if row_type == 'unplanned':
+                entry = row_data
+                child = doc.add_paragraph()
+                child.paragraph_format.left_indent = Cm(min(depth, 5) * 0.45)
+                child.paragraph_format.first_line_indent = Cm(-0.25)
+                child.paragraph_format.space_after = Pt(2)
+                child.paragraph_format.keep_with_next = True
+                child.add_run(f'{number}.  ').bold = True
+                child.add_run(str(entry.get('title', '')).strip()).bold = True
+                performed_on = str(entry.get('performed_on', '')).strip()
+                if performed_on:
+                    child.add_run('  (' + performed_on + ')').italic = True
+                description = (entry.get('description') or '').strip()
+                if description:
+                    detail = doc.add_paragraph(description)
+                    detail.paragraph_format.left_indent = Cm(min(depth, 5) * 0.45 + 0.25)
+                    detail.paragraph_format.space_after = Pt(3)
+                continue
+
+            item = row_data
             para = doc.add_paragraph()
             para.paragraph_format.left_indent = Cm(min(depth, 5) * 0.45)
             para.paragraph_format.first_line_indent = Cm(-0.25)
             para.paragraph_format.space_after = Pt(3)
             para.add_run(f'{number}.  ').bold = True
             para.add_run(item.get('title', '')).bold = True
-            # Retain permanent description and monthly update separately.
             description = (item.get('description') or '').strip()
             content = (item.get('content') or '').strip()
             if description:
@@ -73,25 +97,6 @@ def populate(payload: RenderRequest) -> bytes:
                 label = 'Mjesečni plan: ' if payload.snapshot.get('kind') == 'plan' else 'Mjesečna realizacija: '
                 para.add_run(label).bold = True
                 para.add_run(content)
-
-            for entry in unplanned_by_activity.get(str(item.get('id')), []):
-                child = doc.add_paragraph()
-                child.paragraph_format.left_indent = Cm(min(depth + 1, 5) * 0.45 + 0.15)
-                child.paragraph_format.space_before = Pt(3)
-                child.paragraph_format.space_after = Pt(2)
-                child.paragraph_format.keep_with_next = True
-                child.add_run('Neplanirani posao · ' + str(entry.get('performed_on', '')) + '  ').italic = True
-                child.add_run(str(entry.get('title', '')).strip()).bold = True
-                description = (entry.get('description') or '').strip()
-                if description:
-                    detail = doc.add_paragraph(description)
-                    detail.paragraph_format.left_indent = Cm(min(depth + 1, 5) * 0.45 + 0.35)
-                    detail.paragraph_format.space_after = Pt(2)
-                author = (entry.get('created_by_name') or '').strip()
-                if author:
-                    meta = doc.add_paragraph('Evidentirao/la: ' + author)
-                    meta.paragraph_format.left_indent = Cm(min(depth + 1, 5) * 0.45 + 0.35)
-                    meta.paragraph_format.space_after = Pt(4)
 
         if standalone_unplanned:
             heading = doc.add_paragraph()
@@ -110,11 +115,7 @@ def populate(payload: RenderRequest) -> bytes:
                     detail.paragraph_format.left_indent = Cm(0.45)
                     detail.paragraph_format.space_after = Pt(2)
                 related = (entry.get('related_activity_title') or '').strip()
-                author = (entry.get('created_by_name') or '').strip()
-                meta = ' · '.join(x for x in [
-                    f'Povezano s aktivnošću: {related}' if related else '',
-                    f'Evidentirao/la: {author}' if author else ''
-                ] if x)
+                meta = f'Povezano s aktivnošću: {related}' if related else ''
                 if meta:
                     meta_para = doc.add_paragraph(meta)
                     meta_para.paragraph_format.left_indent = Cm(0.45)
@@ -140,7 +141,7 @@ def render(format: str, payload: RenderRequest):
     if payload.approval and format not in ('modern-pdf', 'modern-letterhead-pdf'):
         raise HTTPException(400, 'Approval metadata requires modern PDF')
     content = (populate_modern(payload, memorandum=(format == 'modern-letterhead-pdf'), approval=payload.approval)
-               if format in ('modern-pdf', 'modern-letterhead-pdf') else populate(payload))
+               if format in ('modern-pdf', 'modern-letterhead-pdf') else populate(payload, pdf_output=(format == 'pdf')))
     if format == 'docx':
         return Response(content=content, media_type='application/vnd.openxmlformats-officedocument.wordprocessingml.document')
     with tempfile.TemporaryDirectory() as tmp:
